@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PortalCast — Will it work on your TV?</title>
+<!--
+  Deliberately a single self-contained file with an ES5-safe inline script and
+  no imports, no modules and no dependencies. This page has to run on the oldest
+  TV browser we care about, including ones that would choke on the rest of the app.
+  Do not "modernise" it. See plan §12 milestone 1b.
+-->
+<style>
+  :root{
+    --bg:#0e1013; --fg:#e8eaed; --dim:#9aa0a6; --line:#2a2f36;
+    --ok:#3ddc84; --no:#ff6b6b; --warn:#ffd166; --card:#161a1f;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:24px; background:var(--bg); color:var(--fg);
+    font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  }
+  h1{font-size:28px; margin:0 0 4px}
+  .sub{color:var(--dim); margin:0 0 24px}
+  h2{font-size:18px; margin:28px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--line)}
+  table{width:100%; border-collapse:collapse; margin:0 0 8px}
+  td{padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top}
+  td.k{width:42%; color:var(--dim)}
+  td.v{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:14px; word-break:break-word}
+  .ok{color:var(--ok)} .no{color:var(--no)} .warn{color:var(--warn)}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; margin:0 0 16px}
+  button{
+    font:inherit; background:#2a2f36; color:var(--fg); border:1px solid #3a4048;
+    border-radius:6px; padding:10px 16px; margin:0 8px 8px 0; cursor:pointer;
+  }
+  button:focus{outline:3px solid var(--warn); outline-offset:2px}
+  #keylog{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:14px; max-height:220px; overflow:auto}
+  #keylog div{padding:2px 0; border-bottom:1px solid var(--line)}
+  textarea{
+    width:100%; min-height:220px; background:#0a0c0f; color:var(--fg);
+    border:1px solid var(--line); border-radius:6px; padding:10px;
+    font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
+  }
+  .big{font-size:20px}
+  @media (max-width:600px){ body{padding:14px} h1{font-size:22px} }
+</style>
+</head>
+<body>
+
+<h1>PortalCast device check</h1>
+<p class="sub">A development instrument. Nothing is uploaded and nothing leaves this device &mdash;
+it inspects the browser and prints what it finds.</p>
+
+<div class="card">
+  <strong>How to get a full result:</strong>
+  <ol style="margin:8px 0 0 18px; padding:0">
+    <li>Press every button on the TV remote, so the <em>Remote buttons</em> section records the key map.</li>
+    <li>Press the two buttons under <em>Screen</em> &mdash; fullscreen and wake lock need a real button press to test.</li>
+    <li>Close the browser <em>completely</em>, reopen this page, and check whether storage survived.</li>
+    <li>Press <em>Build report</em> and paste the output into <code>docs/devices.md</code>.</li>
+  </ol>
+</div>
+
+<h2>Device</h2>
+<table id="t-device"></table>
+
+<h2>Storage &mdash; does a pairing survive?</h2>
+<table id="t-storage"></table>
+<p class="sub">
+  <strong>To test properly:</strong> close the browser <em>completely</em> (not just this page),
+  reopen it, and come back here. If "survived a restart" says no, this TV needs the
+  bookmark fallback (plan &sect;6.5).
+</p>
+
+<h2>URL fragment &mdash; does the bookmark fallback work?</h2>
+<table id="t-fragment"></table>
+<div><button id="b-frag">Write a test fragment, then reload</button></div>
+
+<h2>Crypto &mdash; pairing depends on these</h2>
+<table id="t-crypto"></table>
+
+<h2>Video receiving (Mode A) &mdash; the important one</h2>
+<p class="sub">In the real app the TV reports this to the laptop when they connect, and the laptop
+picks the best codec they both support. This page shows the same information so you can tell in
+advance whether a TV is worth trying.</p>
+<table id="t-rtc"></table>
+
+<h2>Playing files directly (Mode B only)</h2>
+<table id="t-codecs"></table>
+
+<h2>Browser features</h2>
+<table id="t-features"></table>
+
+<h2>Screen</h2>
+<table id="t-screen"></table>
+<div>
+  <button id="b-fs">Try fullscreen</button>
+  <button id="b-wake">Try keeping the screen awake</button>
+</div>
+
+<h2>Remote buttons</h2>
+<p class="sub">Press buttons on your TV remote or keyboard. Each press is logged with everything the browser told us.</p>
+<div class="card" id="keylog"><div class="sub">Waiting for a key press&hellip;</div></div>
+<div><button id="b-clearkeys">Clear</button></div>
+
+<h2>Report</h2>
+<div>
+  <button id="b-report" class="big">Build report</button>
+  <button id="b-copy">Copy to clipboard</button>
+</div>
+<textarea id="report" readonly placeholder="Press Build report."></textarea>
+
+<script>
+/* ES5 only. No const/let, no arrow functions, no template literals. */
+(function () {
+  var LS_FIRST = 'pc_check_first_seen';
+  var LS_LOADS = 'pc_check_load_count';
+  var FRAG_FLAG = 'frag-test';
+
+  var results = {};   /* section -> array of [key, value, verdict] */
+  var keyLog = [];
+
+  function add(section, key, value, verdict) {
+    if (!results[section]) results[section] = [];
+    results[section].push([key, String(value), verdict || '']);
+  }
+
+  function render(tableId, section) {
+    var t = document.getElementById(tableId);
+    if (!t) return;
+    var rows = results[section] || [];
+    var html = '';
+    for (var i = 0; i < rows.length; i++) {
+      var cls = rows[i][2] === 'ok' ? 'ok' : (rows[i][2] === 'no' ? 'no' : (rows[i][2] === 'warn' ? 'warn' : ''));
+      html += '<tr><td class="k">' + esc(rows[i][0]) + '</td><td class="v ' + cls + '">' + esc(rows[i][1]) + '</td></tr>';
+    }
+    t.innerHTML = html;
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function has(obj, prop) {
+    try { return !!(obj && prop in obj); } catch (e) { return false; }
+  }
+
+  function yn(v) { return v ? 'yes' : 'no'; }
+  function verdict(v) { return v ? 'ok' : 'no'; }
+
+  /* ---------- Device ---------- */
+  add('device', 'User agent', navigator.userAgent);
+  add('device', 'Platform', navigator.platform || '(not reported)');
+  add('device', 'Languages', (navigator.languages || [navigator.language]).join(', '));
+  add('device', 'Page URL', location.href);
+  add('device', 'Secure context', yn(window.isSecureContext), verdict(window.isSecureContext));
+  add('device', 'Checked at', new Date().toISOString());
+  render('t-device', 'device');
+
+  /* ---------- Storage ---------- */
+  var lsWorks = false, lsErr = '';
+  try {
+    localStorage.setItem('pc_probe', '1');
+    lsWorks = localStorage.getItem('pc_probe') === '1';
+    localStorage.removeItem('pc_probe');
+  } catch (e) { lsErr = e && e.name ? e.name : 'error'; }
+  add('storage', 'localStorage works', yn(lsWorks) + (lsErr ? ' (' + lsErr + ')' : ''), verdict(lsWorks));
+
+  var first = null, loads = 0;
+  if (lsWorks) {
+    try {
+      first = localStorage.getItem(LS_FIRST);
+      loads = parseInt(localStorage.getItem(LS_LOADS) || '0', 10) || 0;
+      loads = loads + 1;
+      if (!first) { first = new Date().toISOString(); localStorage.setItem(LS_FIRST, first); }
+      localStorage.setItem(LS_LOADS, String(loads));
+    } catch (e2) { /* ignore */ }
+  }
+  add('storage', 'First visit recorded', first || '(none)');
+  add('storage', 'Visits counted', loads);
+  if (!lsWorks) {
+    add('storage', 'Survived a restart', 'cannot tell — localStorage unavailable', 'no');
+  } else if (loads > 1) {
+    add('storage', 'Survived a restart', 'yes if you fully closed the browser between visits', 'ok');
+  } else {
+    add('storage', 'Survived a restart', 'unknown — close the browser fully and return', 'warn');
+  }
+
+  var ssWorks = false;
+  try { sessionStorage.setItem('pc_probe', '1'); ssWorks = sessionStorage.getItem('pc_probe') === '1'; sessionStorage.removeItem('pc_probe'); } catch (e3) {}
+  add('storage', 'sessionStorage works', yn(ssWorks), verdict(ssWorks));
+  add('storage', 'IndexedDB present', yn(has(window, 'indexedDB')), verdict(has(window, 'indexedDB')));
+  render('t-storage', 'storage');
+
+  /* ---------- URL fragment ---------- */
+  var hash = location.hash || '';
+  var fragSurvived = hash.indexOf(FRAG_FLAG) !== -1;
+  add('fragment', 'Current fragment', hash || '(empty)');
+  add('fragment', 'history.replaceState', yn(has(history, 'replaceState')), verdict(has(history, 'replaceState')));
+  if (fragSurvived) {
+    add('fragment', 'Fragment survived a reload', 'yes', 'ok');
+  } else {
+    add('fragment', 'Fragment survived a reload', 'not tested — press the button below', 'warn');
+  }
+  render('t-fragment', 'fragment');
+
+  document.getElementById('b-frag').onclick = function () {
+    try {
+      if (history.replaceState) {
+        history.replaceState(null, '', location.pathname + '#' + FRAG_FLAG + '=' + Date.now());
+      } else {
+        location.hash = FRAG_FLAG + '=' + Date.now();
+      }
+      location.reload();
+    } catch (e) {
+      alert('Could not write a fragment: ' + e);
+    }
+  };
+
+  /* ---------- Crypto ---------- */
+  var c = window.crypto || window.msCrypto;
+  var hasGRV = !!(c && c.getRandomValues);
+  add('crypto', 'crypto.getRandomValues (room passwords — essential)', yn(hasGRV), verdict(hasGRV));
+  var hasUUID = !!(c && c.randomUUID);
+  /* We do not use randomUUID — ids are raw getRandomValues bytes (plan §6.2).
+     Reported for information only, so a missing one is not a problem. */
+  add('crypto', 'crypto.randomUUID (not used — info only)', yn(hasUUID), '');
+  var hasSubtle = !!(c && c.subtle);
+  add('crypto', 'crypto.subtle (used by Trystero, not by us)', yn(hasSubtle), verdict(hasSubtle));
+  add('crypto', 'subtle.digest SHA-256', 'testing…');
+  add('crypto', 'subtle AES-GCM (Trystero needs this)', 'testing…');
+  render('t-crypto', 'crypto');
+
+  function setCryptoRow(label, value, v) {
+    var rows = results['crypto'];
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i][0] === label) { rows[i][1] = value; rows[i][2] = v; }
+    }
+    render('t-crypto', 'crypto');
+  }
+
+  /*
+   * We no longer use crypto.subtle ourselves — PBKDF2 died when the QR started
+   * carrying full-entropy credentials, and ECDH died with the abandoned SAS
+   * design. But Trystero AES-GCM encrypts the SDP handshake with our room
+   * password, so AES-GCM must work or password-protected rooms break entirely.
+   * That is what we test here. Plan §5.1.
+   */
+  if (hasSubtle) {
+    try {
+      c.subtle.digest('SHA-256', new Uint8Array([1, 2, 3])).then(function () {
+        setCryptoRow('subtle.digest SHA-256', 'yes', 'ok');
+      })['catch'](function (e) {
+        setCryptoRow('subtle.digest SHA-256', 'failed: ' + e, 'warn');
+      });
+    } catch (e4) { setCryptoRow('subtle.digest SHA-256', 'threw: ' + e4, 'warn'); }
+
+    try {
+      var keyBytes = new Uint8Array(32);
+      if (hasGRV) { c.getRandomValues(keyBytes); }
+      c.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt'])
+        .then(function (key) {
+          var iv = new Uint8Array(12);
+          if (hasGRV) { c.getRandomValues(iv); }
+          return c.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, new Uint8Array([1, 2, 3, 4]));
+        })
+        .then(function (buf) {
+          var n = buf && buf.byteLength ? buf.byteLength : 0;
+          setCryptoRow('subtle AES-GCM (Trystero needs this)', n > 0 ? 'yes' : 'returned nothing', n > 0 ? 'ok' : 'no');
+        })
+        ['catch'](function (e) {
+          setCryptoRow('subtle AES-GCM (Trystero needs this)', 'FAILED: ' + e, 'no');
+        });
+    } catch (e5) {
+      setCryptoRow('subtle AES-GCM (Trystero needs this)', 'threw: ' + e5, 'no');
+    }
+  } else {
+    setCryptoRow('subtle.digest SHA-256', 'crypto.subtle missing', 'warn');
+    setCryptoRow('subtle AES-GCM (Trystero needs this)', 'crypto.subtle missing — pairing cannot work', 'no');
+  }
+
+  /* ---------- WebRTC receive capability (Mode A) ---------- */
+  var RTCR = window.RTCRtpReceiver;
+  var hasCaps = !!(RTCR && RTCR.getCapabilities);
+  add('rtc', 'RTCPeerConnection present', yn(has(window, 'RTCPeerConnection')), verdict(has(window, 'RTCPeerConnection')));
+  add('rtc', 'RTCRtpReceiver.getCapabilities', yn(hasCaps), hasCaps ? 'ok' : 'warn');
+
+  function codecNames(kind) {
+    try {
+      var caps = RTCR.getCapabilities(kind);
+      if (!caps || !caps.codecs) return '(none reported)';
+      var seen = {}, out = [];
+      for (var i = 0; i < caps.codecs.length; i++) {
+        var m = caps.codecs[i].mimeType || '';
+        if (!seen[m]) { seen[m] = 1; out.push(m.replace(/^video\//, '').replace(/^audio\//, '')); }
+      }
+      return out.join(', ') || '(none)';
+    } catch (e) { return 'error: ' + e; }
+  }
+
+  if (hasCaps) {
+    var vlist = codecNames('video');
+    var alist = codecNames('audio');
+    add('rtc', 'Video codecs it can receive', vlist);
+    add('rtc', 'VP9 (best quality per bit)', /VP9/i.test(vlist) ? 'yes' : 'no', /VP9/i.test(vlist) ? 'ok' : 'warn');
+    add('rtc', 'VP8 (safe fallback)', /VP8/i.test(vlist) ? 'yes' : 'no', /VP8/i.test(vlist) ? 'ok' : 'no');
+    add('rtc', 'H264', /H264/i.test(vlist) ? 'yes' : 'no', /H264/i.test(vlist) ? 'ok' : 'warn');
+    add('rtc', 'AV1', /AV1/i.test(vlist) ? 'yes' : 'no', 'warn');
+    add('rtc', 'Audio codecs it can receive', alist);
+    add('rtc', 'Opus (needed for film audio)', /opus/i.test(alist) ? 'yes' : 'no', /opus/i.test(alist) ? 'ok' : 'no');
+  } else {
+    add('rtc', 'Video codecs it can receive', 'cannot query on this browser', 'warn');
+  }
+  render('t-rtc', 'rtc');
+
+  /* ---------- canPlayType (Mode B only) ---------- */
+  var v = document.createElement('video');
+  var CODECS = [
+    ['MP4 H.264 + AAC', 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'],
+    ['MP4 H.264 High', 'video/mp4; codecs="avc1.640029, mp4a.40.2"'],
+    ['MP4 HEVC', 'video/mp4; codecs="hvc1.1.6.L93.B0"'],
+    ['WebM VP8 + Vorbis', 'video/webm; codecs="vp8, vorbis"'],
+    ['WebM VP9 + Opus', 'video/webm; codecs="vp9, opus"'],
+    ['Matroska (MKV)', 'video/x-matroska'],
+    ['AV1 in MP4', 'video/mp4; codecs="av01.0.05M.08"']
+  ];
+  if (v.canPlayType) {
+    for (var ci = 0; ci < CODECS.length; ci++) {
+      var r = v.canPlayType(CODECS[ci][1]);
+      add('codecs', CODECS[ci][0], r === '' ? 'no' : r, r === 'probably' ? 'ok' : (r === '' ? 'no' : 'warn'));
+    }
+  } else {
+    add('codecs', 'canPlayType', 'not supported', 'no');
+  }
+  render('t-codecs', 'codecs');
+
+  /* ---------- Features ---------- */
+  add('features', 'Service Worker', yn(has(navigator, 'serviceWorker')), has(navigator, 'serviceWorker') ? 'ok' : 'warn');
+  add('features', 'Web Locks (navigator.locks)', yn(has(navigator, 'locks')), has(navigator, 'locks') ? 'ok' : 'warn');
+  add('features', 'BroadcastChannel', yn(has(window, 'BroadcastChannel')), has(window, 'BroadcastChannel') ? 'ok' : 'warn');
+  add('features', 'Screen Wake Lock', yn(has(navigator, 'wakeLock')), has(navigator, 'wakeLock') ? 'ok' : 'warn');
+  add('features', 'navigator.mediaSession', yn(has(navigator, 'mediaSession')), has(navigator, 'mediaSession') ? 'ok' : 'warn');
+  add('features', 'getUserMedia (camera)', yn(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)), 'warn');
+  add('features', 'BarcodeDetector (native)', yn(has(window, 'BarcodeDetector')), 'warn');
+  add('features', 'MediaSource (MSE)', yn(has(window, 'MediaSource')), 'warn');
+  add('features', 'captureStream on <video>', yn(!!(v.captureStream || v.mozCaptureStream)), 'warn');
+  add('features', 'requestVideoFrameCallback', yn(has(v, 'requestVideoFrameCallback')), 'warn');
+  add('features', 'showOpenFilePicker', yn(has(window, 'showOpenFilePicker')), 'warn');
+  add('features', 'showDirectoryPicker', yn(has(window, 'showDirectoryPicker')), 'warn');
+  render('t-features', 'features');
+
+  /* ---------- Screen ---------- */
+  add('screen', 'Window size', window.innerWidth + ' x ' + window.innerHeight);
+  add('screen', 'Screen size', (screen.width || '?') + ' x ' + (screen.height || '?'));
+  add('screen', 'devicePixelRatio', window.devicePixelRatio || 1);
+  var de = document.documentElement;
+  var fsOk = !!(de.requestFullscreen || de.webkitRequestFullscreen || de.msRequestFullscreen);
+  add('screen', 'Fullscreen API', yn(fsOk), fsOk ? 'ok' : 'warn');
+  add('screen', 'Fullscreen attempt', 'not tried');
+  add('screen', 'Wake lock attempt', 'not tried');
+  render('t-screen', 'screen');
+
+  function setScreenRow(label, value, vv) {
+    var rows = results['screen'];
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i][0] === label) { rows[i][1] = value; rows[i][2] = vv; }
+    }
+    render('t-screen', 'screen');
+  }
+
+  document.getElementById('b-fs').onclick = function () {
+    var fn = de.requestFullscreen || de.webkitRequestFullscreen || de.msRequestFullscreen;
+    if (!fn) { setScreenRow('Fullscreen attempt', 'no API', 'no'); return; }
+    try {
+      var p = fn.call(de);
+      if (p && p.then) {
+        p.then(function () { setScreenRow('Fullscreen attempt', 'granted', 'ok'); })
+         ['catch'](function (e) { setScreenRow('Fullscreen attempt', 'refused: ' + e, 'no'); });
+      } else {
+        setScreenRow('Fullscreen attempt', 'called (no promise returned)', 'warn');
+      }
+    } catch (e) { setScreenRow('Fullscreen attempt', 'threw: ' + e, 'no'); }
+  };
+
+  document.getElementById('b-wake').onclick = function () {
+    if (!(navigator.wakeLock && navigator.wakeLock.request)) {
+      setScreenRow('Wake lock attempt', 'no API', 'no'); return;
+    }
+    try {
+      navigator.wakeLock.request('screen').then(function () {
+        setScreenRow('Wake lock attempt', 'granted', 'ok');
+      })['catch'](function (e) { setScreenRow('Wake lock attempt', 'refused: ' + e, 'no'); });
+    } catch (e) { setScreenRow('Wake lock attempt', 'threw: ' + e, 'no'); }
+  };
+
+  /* ---------- Remote buttons ---------- */
+  var logEl = document.getElementById('keylog');
+  function onKey(e) {
+    var entry = {
+      key: e.key === undefined ? '(undefined)' : String(e.key),
+      code: e.code === undefined ? '(undefined)' : String(e.code),
+      keyCode: e.keyCode,
+      which: e.which
+    };
+    keyLog.push(entry);
+    if (keyLog.length === 1) logEl.innerHTML = '';
+    var d = document.createElement('div');
+    d.textContent = 'key="' + entry.key + '"  code="' + entry.code + '"  keyCode=' + entry.keyCode;
+    logEl.insertBefore(d, logEl.firstChild);
+    /* Tizen's Back is keyCode 10009 and often has no useful key — plan §11.2 */
+    if (entry.keyCode === 10009) { d.className = 'warn'; d.textContent += '   <- Tizen Back'; }
+    if (e.key && String(e.key).indexOf('Media') === 0) { d.className = 'ok'; }
+  }
+  window.addEventListener('keydown', onKey, false);
+
+  document.getElementById('b-clearkeys').onclick = function () {
+    keyLog = [];
+    logEl.innerHTML = '<div class="sub">Cleared. Waiting for a key press…</div>';
+  };
+
+  /* ---------- Report ---------- */
+  var ORDER = ['device', 'storage', 'fragment', 'crypto', 'rtc', 'codecs', 'features', 'screen'];
+  function buildReport() {
+    var out = 'PortalCast /check report\n';
+    out += '========================\n\n';
+    for (var s = 0; s < ORDER.length; s++) {
+      var name = ORDER[s];
+      var rows = results[name] || [];
+      out += '[' + name.toUpperCase() + ']\n';
+      for (var i = 0; i < rows.length; i++) {
+        out += '  ' + rows[i][0] + ': ' + rows[i][1] + '\n';
+      }
+      out += '\n';
+    }
+    out += '[REMOTE BUTTONS] (' + keyLog.length + ' presses)\n';
+    if (!keyLog.length) {
+      out += '  none recorded - press some remote buttons and rebuild\n';
+    } else {
+      for (var k = 0; k < keyLog.length; k++) {
+        out += '  key="' + keyLog[k].key + '" code="' + keyLog[k].code + '" keyCode=' + keyLog[k].keyCode + '\n';
+      }
+    }
+    return out;
+  }
+
+  document.getElementById('b-report').onclick = function () {
+    document.getElementById('report').value = buildReport();
+  };
+
+  document.getElementById('b-copy').onclick = function () {
+    var ta = document.getElementById('report');
+    if (!ta.value) ta.value = buildReport();
+    try {
+      ta.removeAttribute('readonly');
+      ta.select();
+      var done = document.execCommand && document.execCommand('copy');
+      ta.setAttribute('readonly', 'readonly');
+      if (!done && navigator.clipboard) { navigator.clipboard.writeText(ta.value); }
+    } catch (e) {
+      alert('Could not copy automatically — please select the text and copy it manually.');
+    }
+  };
+})();
+</script>
+</body>
+</html>
