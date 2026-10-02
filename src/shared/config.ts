@@ -7,8 +7,11 @@
  */
 export const APP_ID = 'portalcast-7f3a9c21'
 
-/** Ephemeral pairing QR lifetime, milliseconds. Plan §6.3. */
-export const PAIR_CODE_TTL_MS = 90_000
+/**
+ * Ephemeral pairing link lifetime, milliseconds. Plan §5.3, §6.3; context decision 53.
+ * Long enough to send the link to a friend; single-use regardless.
+ */
+export const PAIR_CODE_TTL_MS = 10 * 60_000
 
 /** How long before the Portal shows "not reachable". It then retries forever. Plan §6.7. */
 export const UNREACHABLE_WARN_MS = 20_000

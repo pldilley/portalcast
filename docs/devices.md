@@ -25,6 +25,17 @@ Fill in as results arrive. The four rows that change design decisions are marked
 
 ---
 
+## Source browsers: background-tab survival
+
+Plan §14: play a long file with the Source tab in the background for 30+ minutes; record whether
+playback survives. These are laptop browsers, not TVs, so they get their own table.
+
+| Browser + version | OS | Minutes in background | Survived? | Notes (Memory Saver, throttling seen) |
+|---|---|---|---|---|
+| _(none yet)_ | | | | |
+
+---
+
 ## Reports
 
 <!--

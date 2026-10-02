@@ -2,6 +2,10 @@
 
 Companion to `portalcast-plan.md`. The plan says **what** to build; this file records **why**: the original idea, what research found, which options were considered and rejected, and which facts are verified versus assumed. It was written from planning conversations on 28–30 September 2026. Use it when a decision in the plan needs revisiting.
 
+**The plan is the single source of truth for the current design.** This file does not restate the design; where it mentions it, it points at a plan section. If the two disagree, the plan wins and this file is the one to fix. Two maintenance rules keep it that way:
+- **Never describe the current design here.** Record the reasoning, the research and the owner's words, and link to the plan for the "what".
+- **Never reword a decision-log entry in place.** When a decision changes, mark the old entry *Superseded by #N* and append a new one. Partial rewording is how entries went stale before (decision 49).
+
 **Section 14 holds browser and library facts verified by direct lookup.** Prefer it over anything else in this file where they disagree.
 
 Confidence labels used below:
@@ -19,22 +23,18 @@ The first idea was to connect the devices by IP address, then add codes or QR co
 
 ---
 
-## 2. Owner priorities and constraints
+## 2. Owner priorities, in the owner's words
 
-- **[decision]** Build from scratch in TypeScript, with AI assistance (Claude Code), rather than forking an old project. Reason: technology has moved on, and the owner doesn't want to be tied to a small, inactive codebase.
-- **[decision]** Keep it simple.
-- **[decision]** Use Trystero for peer discovery.
-- **[decision]** **Pairing by QR code: the TV displays, another device's camera reads.** Nothing is ever typed on the TV. Superseded the earlier typed-code design on 30 September (see 7.10).
-- **[decision]** No "Allow/Deny" prompt at all. Physical line of sight to the TV screen *is* the authorisation, so there is nothing to approve.
-- **[decision]** **A Portal talks to one Source at a time**, chosen from an on-screen list. This replaces the "Switch to this device?" prompt, and solves TV memory limits, households fighting over a screen, and revocation with a single control.
-- **[decision]** Prefer simplicity over cryptographic cleverness. Reason, in the owner's words: "Simplicity is often the best way to do security" — a design with no weak secret needs no audit.
-- **[decision]** Name: **PortalCast** (nod to the game *Portal*; the owner found the name little-used online and in code).
-- **[decision]** Phase 3 centres on a **mobile Remote** (possibly an installable PWA), so a friend can watch a file from the owner's laptop on their own TV and control it themselves.
-- **[decision]** **Target 1080p maximum, 720p as the sweet spot.** 4K and HDR are out of scope. Owner: "Most people will likely be playing crappy quality downloads anyway."
-- **[decision]** **Avoid Mode B if Mode A proves good enough on a LAN.** Owner: "I am tempted to avoid Mode B as much as possible, unless I find LAN performance poor."
-- **[decision]** **Hosting on GitHub Pages** to start — the owner has not used Cloudflare. Use a *user* page so the site serves from root, since a project page's `/<repo>/` prefix would make someone type `username.github.io/portalcast/check` on a TV d-pad.
-- **[decision]** **TURN relay is phase 4, last.** Public usage would exhaust a free tier quickly (see section 10).
-- The owner describes himself as preferring plain-language explanations; keep user-facing copy and docs simple.
+The standing principles behind the decision log. Each specific choice is in §12; the design is in the plan.
+
+- Build from scratch in TypeScript, with AI assistance, rather than forking an old project — technology has moved on, and a small inactive codebase is a tie (decision 5).
+- **Keep it simple.** "Simplicity is often the best way to do security" — a design with no weak secret needs no audit (decisions 6, 7, 43).
+- Nothing is ever typed on the TV, and line of sight to the screen is the authorisation (decisions 6, 9).
+- Quality: "Most people will likely be playing crappy quality downloads anyway." 1080p ceiling, 720p sweet spot (decision 21).
+- Mode B: "I am tempted to avoid Mode B as much as possible, unless I find LAN performance poor." Shelved until Mode A is measured (decisions 22, 45).
+- Hosting: GitHub Pages to start; the owner has not used Cloudflare. The `<user>.github.io` root repo is already in use, so the site lives under a project path — acceptable, since only the owner and a few friends type a URL on a TV (plan §4, decision 25).
+- TURN last, because public usage would exhaust a free tier (decision 14, §10).
+- Plain-language explanations; keep user-facing copy and docs simple.
 
 ---
 
@@ -46,12 +46,12 @@ The first idea was to connect the devices by IP address, then add codes or QR co
 - The design later moved from typed codes to **QR codes only** (7.10). The reasoning here is unaffected: a rendezvous identifier is needed either way.
 
 ### 3.2 Two ways to get the video to the TV
-1. **Mode A, live capture.** The laptop plays the file in a hidden `<video>`, captures it with `captureStream()`, and sends it as a WebRTC media stream. **[knowledge]** Plays anything the laptop browser can decode, audio sync is handled, and WebRTC adapts quality to the connection. But it's re-encoded like a video call (quality drops, especially with fast motion) and uses laptop CPU.
-   - **[verified 30 Sep]** `captureStream()` has **never shipped in WebKit**, so Safari and all iOS browsers cannot be a Mode A Source. Firefox only got it unprefixed in 149. See 14.1. Owner accepted a Chrome-first release.
-   - **[verified 30 Sep]** WebRTC quality defaults assume a video call. Tuned properly (14.4) Mode A at 1080p on a LAN should be close to transparent, which narrows Mode B's advantage to CPU cost, 4K and HDR.
-2. **Mode B, original file bytes.** The laptop sends raw file bytes; the TV plays them. Original quality, cheap seeking. **[knowledge]** But the TV's browser must decode the format itself: MP4/H.264 is fine, MKV and HEVC often aren't, and many personal libraries are MKV. Remuxing MKV→MP4 in the browser with ffmpeg.wasm is possible but real work.
+1. **Mode A, live capture** — re-encode on the laptop and send a WebRTC stream. **[knowledge]** Plays anything the laptop can decode and adapts to the connection, at the cost of a call-style re-encode and laptop CPU.
+   - **[verified 30 Sep]** `captureStream()` has **never shipped in WebKit**, and Firefox only got it unprefixed in 149 (14.1).
+   - **[verified 30 Sep]** WebRTC quality defaults assume a video call; tuned (14.4), 1080p on a LAN should be close to transparent.
+2. **Mode B, original file bytes** — the TV decodes the file itself. **[knowledge]** Original quality, but MKV and HEVC often won't play on a TV browser, and many personal libraries are MKV.
 
-**[decision]** Build Mode A first to prove the concept, then Mode B as the "high quality" mode.
+Originally Mode B was to follow Mode A as the "high quality" mode (decision 2). Once 4K and HDR were ruled out that case collapsed, and Mode B is now shelved until Mode A is measured (decisions 21, 22, 45; plan §7).
 
 ### 3.3 How to feed file bytes to the TV (Mode B)
 
@@ -63,7 +63,7 @@ The first idea was to connect the devices by IP address, then add codes or QR co
 - **[knowledge]** Service Workers require HTTPS, and older TV browsers may have patchy support, so this must be tested on real TVs.
 - **Assessment [30 Sep]: the Service Worker is the *cheap* option, not the expensive one.** It lets the TV's own native media pipeline read the index, map seeks to ranges and choose its buffering, so our code writes zero media logic. On Tizen/webOS it also has wider format coverage than MSE, because `<video src>` often reaches the platform decoder, which accepts more than `MediaSource.isTypeSupported()` admits **[knowledge — test on device]**. Its real costs are: no WebRTC in worker scope (W3C SW issue #1522), so every request routes SW → page → data channel; worker lifecycle (killed ~30 s idle, channel to the page gone on revival); and needing `skipWaiting()` + `clients.claim()` for first-load control.
 - **Correction to Browsercast's per-chunk model [30 Sep, knowledge].** A `<video>` element does not issue many small range requests; it issues **one open-ended** `Range: bytes=0-` and reads the body lazily, throttling by not reading. New requests happen on *seek*. So the Service Worker should answer once with a `ReadableStream` it pumps continuously, getting backpressure free via `controller.desiredSize`. This is very likely the cause of the slow initial load and seeking Browsercast reports, and it makes "1 MB chunks, prefetch the next one" the wrong design.
-- **[decision 30 Sep]** Mode B stays milestone 7 of phase 1, not a later phase, because of laptop CPU cost, 4K and HDR — and because it translates poorly to the internet, where the Source's upload is a hard floor.
+- The design that resulted is recorded in plan §7 (Mode B, parked). It is only built if the gate there opens.
 
 ### 3.4 TV browser realities
 - **[knowledge]** Samsung (Tizen) and LG (webOS) browsers are Chromium-based and fairly capable. Fire TV has Silk. Many Android TV / Google TV devices ship **with no browser**; a browser can be sideloaded (TV Bro is popular; sideloaded Chrome works but is awkward with a remote).
@@ -101,7 +101,7 @@ All **[verified]** from github.com/dmotz/trystero unless marked.
 - **Privacy statement:** beyond peer discovery, app data never touches the strategy medium; it's sent directly peer-to-peer and end-to-end encrypted.
 - **Encryption of the handshake:** SDPs pass through the strategy medium. By default they're encrypted with a key derived from app ID + room ID, which **a relay operator could reverse-engineer**. Passing a `password` derives the key from it instead (AES-GCM). All peers must use the same password or they can't connect.
 - `joinRoom(config, roomId, callbacks)`: `config.appId` (required), `password`, `passive`, `relayConfig` (`urls`, `redundancy`, `manualReconnection`, `warnOnRelayFailure`, strategy keys), `rtcConfig`, `trickleIce`, `turnConfig`, `rtcPolyfill`.
-- Callbacks: `onJoinError(details)` fires on wrong password, handshake failure/timeout, or **when SDP was exchanged but a direct connection couldn't be made** (the "you need TURN" case). `onPeerHandshake(peerId, send, receive, isInitiator)` is an async gate that runs after transport connects but **before the peer becomes active**: resolve to accept, throw to reject. `handshakeTimeoutMs` defaults to 10,000 ms. Pending peers don't trigger `onPeerJoin` and their non-handshake data is dropped. This is the hook for roles and the "Switch device?" prompt.
+- Callbacks: `onJoinError(details)` fires on wrong password, handshake failure/timeout, or **when SDP was exchanged but a direct connection couldn't be made** (the "you need TURN" case). `onPeerHandshake(peerId, send, receive, isInitiator)` is an async gate that runs after transport connects but **before the peer becomes active**: resolve to accept, throw to reject. `handshakeTimeoutMs` defaults to 10,000 ms. Pending peers don't trigger `onPeerJoin` and their non-handshake data is dropped. This is the hook for the `hello` role check (plan §6.5).
 - Room API: `leave()`, `getPeers()`, `addStream`/`removeStream`, `addTrack`/`removeTrack`/`replaceTrack` (with `target` and `metadata`), `onPeerJoin`, `onPeerLeave`, `onPeerStream`, `onPeerTrack`, `makeAction(id, config)`, `ping(peerId)`.
 - `makeAction` handles serialisation and **automatic chunking** of large data, progress callbacks, binary metadata, and a **request/response** kind (`kind: 'request'`, `request()`, `requestMany()`, `timeoutMs`). The request kind fits Mode B's "give me bytes X–Y".
 - `selfId`, `getRelaySockets()` (relay connection state, useful for a debug panel), `pauseRelayReconnection()` / `resumeRelayReconnection()`.
@@ -126,24 +126,11 @@ All **[verified]** from github.com/dmotz/trystero unless marked.
 
 ---
 
-## 6. Privacy model (summary)
+## 6. Privacy model — reasoning
 
-- Public relays see: each browser's IP (as any website would), a hashed topic, timing. They can't read the password-encrypted handshake, video, file names, or control messages.
-- STUN server sees public IP only.
-- A TURN server (phase 4) would see traffic volume between two IPs, not contents.
-- Our static host sees only page loads.
-- Our static host also never sees room credentials, because they live only in URL fragments, which browsers do not send to servers.
+The current privacy model — what each party can see, and the threat table — is plan §5.2 and §5.3. What belongs here is why it is shaped that way.
 
-**There is no longer a short-secret weak spot.** The QR code transfers a 128-bit room UUID and a 256-bit password directly, so nothing in the system is brute-forceable and no key derivation is needed anywhere. This is the single biggest simplification the QR design bought (7.10).
-
-Remaining exposures, all accepted:
-
-| Exposure | Assessment |
-|---|---|
-| QR captured during its 90-second life | The attacker pairs and gains lasting access to that TV. Worst case is casting to someone's telly; the TV holds no user data. Covered by single-use (the room closes on first pair), short expiry, and a Remove option in the Portal's Source list |
-| A forwarded pairing link passes through email or a messaging provider | Those credentials die on first use. Worth one line on a privacy page |
-| A TV syncing bookmarks to a manufacturer account | The permanent credentials for that pairing reach that cloud. Unavoidable if we rely on bookmarks for TVs that wipe `localStorage`. State it on the privacy page |
-| A peer requesting a file it was never offered | `fileId`s are random opaque handles minted per profile per file, never paths or names, and the Source checks profile membership on every request |
+**There is no short-secret weak spot, and that is the whole point.** The QR code transfers a 128-bit room id and a 256-bit password directly, so nothing in the system is brute-forceable and no key derivation is needed anywhere. This is the single biggest simplification the QR design bought (7.10).
 
 **Superseded weak spot, kept for the record.** The earlier design derived `roomId` and `password` from a short typed code with a single SHA-256. That was enumerable offline — a single SHA-256 is nanoseconds, so 10⁶ six-digit codes is instant and even the proposed 31⁸ ≈ 852 billion alphanumeric space is hours on a GPU. Length was never the lever; the derivation was. See 7.10 for why the whole approach was dropped rather than patched.
 
@@ -249,45 +236,36 @@ All **[knowledge]**, not researched in depth.
 - Distribution: **store listing preferred** [decision]; the website can link straight to it. Casting extensions are an ordinary category and should pass review if not pitched around piracy **[knowledge]**. Sideloading is awkward: Chrome needs developer mode; Firefox requires Mozilla signing, though unlisted signing is possible **[knowledge]**.
 
 ### Phase 3 — mobile Remote, and watching with a friend
-- Original phase 3 idea: share the controller tab to the TV so it can be controlled remotely, or send file descriptions and thumbnails instead.
-- **Rejected: streaming the tab.** Needs a screen-share permission prompt every time, and the viewer still couldn't click inside the shared picture without building a translation layer.
-- **Chosen: send data, not pixels.** Source sends a library (names, durations, small JPEG thumbnails ~320 px generated by seeking a hidden `<video>` and drawing to `<canvas>`); the Remote renders its own UI.
-- Owner then shifted the Remote to **a phone**, not the TV, because a friend watching remotely can't control someone else's Portal otherwise. Portal stays the playback authority; the physical TV remote still handles basic play/pause.
-- Friend flow **[revised 30 Sep]**: friend opens `/tv`; their TV shows its QR code; that payload reaches the owner's laptop (scanned by the friend's phone and forwarded, or shared as a link); the owner's laptop joins as Source. Note the direction is now the owner *accepting* a link to someone else's TV, rather than the friend joining the owner's room.
-- **Profiles are the sharing boundary.** A friend gets their own profile, so they see only the files in it, in a room no other Source is in. This replaced an earlier plan of per-friend rooms: profiles express the same isolation as something a user already understands and asks for.
-- This makes phase 3 an **internet** scenario, not LAN. Implications: upload bandwidth on the Source's connection becomes the limit (roughly 5–10 Mbit/s for typical 1080p in Mode B **[knowledge]**); Mode A is the better default since WebRTC adapts quality.
-- **Seek feedback lags**, because a seek travels Remote → Portal → Source. The Portal should predict position locally and reconcile against `status`, or the UI feels broken. Not yet designed.
-- Open: a Remote sharing the Portal's room cannot be revoked independently of the Source, since the room password is the only credential. If that matters, the Remote needs its own token.
+Design: plan §3 (Remote topology), §11.3 (Remote UI and pairing), §13 phase 3. Reasoning only below.
+- Original idea: share the controller tab to the TV so it can be controlled remotely. **Rejected: streaming the tab** — a screen-share prompt every time, and the viewer still couldn't click inside the picture without a translation layer. **Chosen: send data, not pixels** (decision 12).
+- The owner moved the Remote to **a phone**, not the TV, because a friend watching remotely can't otherwise control someone else's Portal.
+- The friend flow reverses direction: the owner's laptop *accepts* a link to the friend's TV, rather than the friend joining the owner's room. So no new pairing mechanism is needed.
+- **Profiles are the sharing boundary.** They replaced an earlier plan of per-friend rooms, expressing the same isolation as something users already understand (decision 18).
+- This makes phase 3 an **internet** scenario. The Source's upload becomes the limit (roughly 5–10 Mbit/s for typical 1080p in Mode B **[knowledge]**), which is one more reason Mode A is the default there.
+- Remote revocation and seek-feedback lag were open here; both were settled by decision 39 (the Remote pairs with the Source in its own room, and updates optimistically).
 - Phase 3 depends only on phase 1, so it can come before phase 2.
 
 ### Phase 4 — TURN relay
 - **[knowledge]** Most home-to-home WebRTC connections succeed directly with STUN; commonly cited figures are roughly 80–90%. The rest (strict NAT, some mobile carriers, corporate networks) need TURN. Measure the real rate in phase 3 rather than trusting this.
 - **Cost reasoning [decision + arithmetic]:** relayed video passes through the TURN server. A 2-hour 1080p film is roughly 2–4 GB. Cloudflare's free 1,000 GB/month ÷ 2–4 GB ≈ 250–500 relayed films per month across **all** users. A public service would burn through that quickly.
-- Options to evaluate: self-hosted coturn on a VPS with generous bandwidth; short-lived per-session TURN credentials (needs a tiny backend); per-user caps; paid tier; "bring your own TURN".
-- Until then: detect the failure via `onJoinError` and show a clear message; log frequency.
+- The options to evaluate and the interim behaviour are in plan §13, phase 4.
 
 ---
 
 ## 11. Keeping the Source tab alive
 
-All **[knowledge]**; not checked against browser documentation during research. Verify early with real tests (plan section 12).
-- There is no JavaScript API that simply keeps a tab alive.
-- Chrome/Edge slow timers in background tabs (down to about once a minute after a while) and Memory Saver can discard inactive tabs; tabs playing audio or holding active real-time connections are generally spared. Users can add a site to "Always keep these sites active".
-- Firefox throttles background timers and can unload tabs under memory pressure, preferring ones not playing media. Safari throttles background tabs fairly aggressively.
-- Phones (especially iOS Safari) suspend JavaScript within seconds of backgrounding or locking; WebRTC drops. Fine for a Remote (reconnects on wake), bad for a Source.
-- Laptop sleep/lid close stops everything.
-- Design response: message-driven Source (no timer loops), heartbeats from the always-visible Portal, Page Lifecycle events (`visibilitychange`, `freeze`, `resume`, `pagehide`) for detection and reconnect, clear "keep this tab open and laptop awake" messaging, Screen Wake Lock on the Portal only.
+The rules are plan §9. All browser behaviour there is **[knowledge]**, not checked against browser documentation during research — verify it early with the background-tab tests in plan §14.
 
 ---
 
 ## 12. Decision log
 
-Entries 1–5 and 11–14 stand as originally recorded. Entries 6–10 were rewritten on 30 September; the designs they replaced are in 7.10.
+Append-only from 2 October 2026 (decision 49): a changed decision is marked *Superseded by #N* or *Amended by #N* and a new entry is appended — older entries are never reworded. Before that date, entries 6–10 were rewritten on 30 September (the designs they replaced are in 7.10), and 8, 25 and 36 were revised in place.
 
 | # | Decision | Alternatives rejected | Why |
 |---|---|---|---|
 | 1 | Pair by rendezvous identifier, not IP | IP address | Browsers can't accept inbound connections; signalling is needed anyway |
-| 2 | Mode A first, then Mode B | MSE-only; B-first | A proves the concept fastest; B needs TV codec support |
+| 2 | Mode A first, then Mode B | MSE-only; B-first | A proves the concept fastest; B needs TV codec support. ***Superseded by #22:** Mode B is shelved until Mode A is measured* |
 | 3 | Service Worker range bridge for Mode B | MSE | The TV's own media pipeline reads the container index and maps seeks to byte ranges, so we write zero media logic. MSE means parsing the index *and* re-wrapping into fragmented segments — a remuxer. Proven by Browsercast |
 | 4 | Trystero for signalling | PeerJS, own server | No server to run; strategy is swappable; password-encrypted handshake; handshake hook |
 | 5 | Build from scratch | Fork/contribute to Browsercast | Browsercast is tied to Chromecast, small and inactive |
@@ -300,14 +278,14 @@ Entries 1–5 and 11–14 stand as originally recorded. Entries 6–10 were rewr
 | 12 | Phase 3 Remote on phone, data not pixels | Stream Source tab; TV-only UI | Enables friend scenario; no prompts; clickable |
 | 13 | Name: PortalCast | Viewport | Owner preference; *Portal* reference. Check trademarks ("Portal" is Valve's game and was a Meta device) |
 | 14 | TURN deferred to phase 4 | TURN in phase 3 | Free tiers too small for public use |
-| 15 | **Accept that pairing needs a camera somewhere** | A typeable manual fallback | UUID + 256-bit password is far too long to type. Nearly everyone has a phone camera, and the phone path will likely become primary |
-| 16 | **Chrome first, then Firefox, then Safari via canvas** | Cross-browser from day one | `captureStream()` has never shipped in WebKit (14.1), so Mode A cannot work there at all. Owner accepted this explicitly |
+| 15 | **Accept that pairing needs a camera somewhere** | A typeable manual fallback | UUID + 256-bit password is far too long to type. Nearly everyone has a phone camera, and the phone path will likely become primary. *(Terminology amended by #44: the room id is 16 raw random bytes, not a UUID. The reasoning is unchanged.)* |
+| 16 | **Chrome first, then Firefox, then Safari via canvas** | Cross-browser from day one | `captureStream()` has never shipped in WebKit (14.1), so Mode A cannot work there at all. Owner accepted this explicitly. ***Amended by #23:** native Mode A cannot work in WebKit, but the separate Mode A-canvas route can (14.5)* |
 | 17 | **Mode A quality tuning is mandatory, not optional** | WebRTC defaults | Every default assumes a video call. Untuned, captured playback looks like one (14.4) |
 | 18 | **Profiles are the sharing and isolation boundary** | Per-friend rooms as a separate concept | Same isolation, expressed as something users already ask for. One active profile per tab; extra tabs for more |
 | 19 | **`barcode-detector` ponyfill for scanning** | Native `BarcodeDetector`; jsQR directly | Native is missing on desktop Chrome for Windows and Linux (14.2). The ponyfill gives one code path with a native fast path where it exists |
 | 20 | **No blacklisting of failed connection attempts** | Blacklist peers that fail auth | Technically impossible: a wrong password means no connection, so no ICE candidates, so no IP; peer IDs are self-generated and free to re-roll. Worse, rotate-on-attack would itself be a denial of service. Log for visibility instead — a 256-bit password has no guessing threat to mitigate |
 | 21 | **1080p ceiling, 720p sweet spot. 4K and HDR out of scope** | Support whatever the file is | The only two things a realtime re-encode cannot preserve. Excluding them removes two of Mode B's three justifications, and most material people actually cast is a modest-quality download. Owner: "If people want 4K… don't use my little project" |
-| 22 | **Mode B becomes conditional, gated on measurement** | Build it as a certainty | With 4K and HDR gone, only laptop CPU justifies it — and a 720p encode is much lighter, so even that weakens. Gate: measure tuned Mode A on a LAN and audit the library first (plan §7) |
+| 22 | **Mode B becomes conditional, gated on measurement** | Build it as a certainty | With 4K and HDR gone, only laptop CPU justifies it — and a 720p encode is much lighter, so even that weakens. Gate: measure tuned Mode A on a LAN and audit the library first (plan §7). ***Amended by #45:** the audit is not a prerequisite — it runs only if the measurement shows Mode A falling short* |
 | 23 | **Mode A is two implementations: native and canvas** | One path with a Safari caveat | `captureStream()` has never shipped in WebKit. The canvas route needs its own capture, its own audio graph and our own A/V sync, so it is separate work — last in the milestone order, after Chrome and Firefox |
 | 24 | **File persistence: metadata everywhere, handles in Chromium, re-pick elsewhere** | Copy files into IndexedDB; extension polyfill | Copying duplicates the library (2 GB film = 2 GB quota). No API exists outside Chromium to hold a handle to a user's file, and an extension would need a filesystem path `<input>` never provides. See 14.7 |
 | 25 | **Ship a `/check` page early — as a development instrument for our own devices** | Buy more TVs; rely on emulators alone; crowdsource it publicly | One page answers the TV unknowns (`localStorage` survival, fragment survival, receive codecs, the remote's key map) without guessing. **Revised:** an earlier version of this entry proposed a *public* page, crowdsourced on r/smarttv and doubling as marketing. The owner ruled that out as unrealistic — "it will be unlikely other strangers would randomly help me test" — and testing is the owner's own TVs, the Tizen/webOS emulators, and a few friends. Field data from devices we never touch is decision 46's job instead. Consequence: `/check` needs no short domain |
@@ -324,16 +302,21 @@ Entries 1–5 and 11–14 stand as originally recorded. Entries 6–10 were rewr
 | 36 | **No Portal playback controls in v1; keyboard shortcuts on the Source and Remote instead** | Honour the remote's media keys on the Portal; on-screen transport | **Two** blockers, not three: in Mode A a local pause would desync from the still-streaming Source, so a press must become `source-control`; and keys with no affordance or feedback feel broken, which needs most of a transport UI anyway. *An earlier version of this entry claimed the event mechanism was also unproven — wrong: TV browsers map remote buttons to standard DOM `keydown` events (§14.10), so receiving them is easy.* `/check` logs the real key map; revisit with data. Source and Remote get ordinary hotkeys now, and the Remote can later expose phone lock-screen controls via `mediaSession`, which *is* well supported on phones |
 | 37 | **One pairing threshold: warn at ~20 s, then keep retrying forever** | ~20 s warn plus a 3-minute fall-through to the QR screen | A TV left on must never silently abandon its pairing and start showing a QR code to the room. At ~20 s show Retry / Remove / **Pair a new source** and keep retrying indefinitely; leaving for the pairing screen is always the user's choice. **Supersedes the briefly-adopted 3-minute auto-fall-through** |
 | 38 | **The Remote is the Source UI in a different mode** | A separate mobile UI | Same React/Mantine component tree with a mode flag; profile switcher swapped for a remote icon offering Disconnect, and every action proxied to the Source. Plan §11.3 |
-| 39 | **A Remote pairs directly with the Source, in its own two-peer room. It never joins a Portal's room** | Remote as a third peer in the Portal's room | Five reasons: it matches the UI (§11.3 proxies every action to the Source anyway); it survives the Portal switching Sources, which would otherwise orphan the Remote and force credential migration; per-Remote revocation without rotating a room the Source depends on; the TV's credentials never reach a phone; and it reuses the Source-side minting flow. **Accepted cost: the Source is a router** — `status` goes Portal → Source → Remote and `control` the other way, so the Remote must update optimistically and reconcile |
-| 40 | **One room per Remote pairing** | One shared "remote room" any phone can join by URL | Independent revocation. Sharing a URL between two phones is harmless (both trusted) but loses it, so scan once per device |
-| 41 | **Dissolve the old "Page requirements" section into the three UI specs; renumber sections 1–14** | Keep a summary section beside the detailed specs | The summary had drifted: its Remote bullets described a thumbnail grid and pairing with the TV, both contradicting the UI spec and the room topology. Duplicated requirements are where inconsistency breeds. Letter-suffixed sections (7a, 10a–10d) were the symptom of a numbering that needed reflowing, not of a document that needed splitting |
+| 39 | **A Remote pairs directly with the Source, in its own two-peer room. It never joins a Portal's room** | Remote as a third peer in the Portal's room | Five reasons: it matches the UI (plan §11.3 proxies every action to the Source anyway); it survives the Portal switching Sources, which would otherwise orphan the Remote and force credential migration; per-Remote revocation without rotating a room the Source depends on; the TV's credentials never reach a phone; and it reuses the Source-side minting flow. **Accepted cost: the Source is a router** — `status` goes Portal → Source → Remote and `control` the other way, so the Remote must update optimistically and reconcile |
+| 40 | **One room per Remote pairing** | One shared "remote room" any phone can join by URL | Independent revocation. Sharing a URL between two phones is harmless (both trusted) but loses it, so scan once per device. ***Clarified by #50:** the scanned URL is single-use; only the permanent `/remote#…` bookmark can be shared* |
+| 41 | **Dissolve the old "Page requirements" section into the three UI specs; renumber sections 1–14** | Keep a summary section beside the detailed specs | The summary had drifted: its Remote bullets described a thumbnail grid and pairing with the TV, both contradicting the UI spec and the room topology. Duplicated requirements are where inconsistency breeds. Letter-suffixed sections (7a, 10a–10d) were the symptom of a numbering that needed reflowing, not of a document that needed splitting. *(The plan later grew to 15 sections when device reports became §12.)* |
 | 42 | **The Portal reports its receive capabilities at connect time; the Source chooses the codec** | Hardcode VP9; probe once at pairing and cache; rely on `/check` | WebRTC's offer/answer already prevents sending an undecodable codec — the gap is *ordering*, since Chrome favours VP8 even when VP9 is mutually available. A `capabilities` message on every connect fixes that and survives TV firmware updates. Owner's suggestion, and better than the probe-and-guess the plan originally implied |
 | 43 | **PortalCast performs no cryptography of its own beyond `getRandomValues`** | Keep `crypto.subtle` as a stated requirement of our code | PBKDF2 died with full-entropy QR credentials; ECDH died with the SAS design. `crypto.subtle` is still a hard requirement, but **Trystero's**, for AES-GCM on the SDP handshake. Recorded because `/check` was still probing ECDH — dead weight from an abandoned design, now replaced with an AES-GCM probe |
-| 44 | **No UUIDs. Ids are 16 raw bytes from `getRandomValues`, and the scanned payload is binary, not JSON** | `crypto.randomUUID`; JSON then base64url; carrying the TV name in the QR | Owner's observation that `getRandomValues` is far better supported. It is also *more* random (128 bits versus UUID v4's 122, six being fixed markers) and shorter to encode. Dropping JSON and the name — which §6.3 already sends over the data channel — cuts the scanned URL from 190 to 94 characters and the QR from **73×73 to 53×53 modules at ecc=H** (measured with `uqr`, 14.3). That is 37% larger modules on screen, aimed squarely at the weakest link: a webcam reading a glossy panel from sofa distance. Field renamed `roomUuid` → `roomId` so nobody reaches for `randomUUID` again |
+| 44 | **No UUIDs. Ids are 16 raw bytes from `getRandomValues`, and the scanned payload is binary, not JSON** | `crypto.randomUUID`; JSON then base64url; carrying the TV name in the QR | Owner's observation that `getRandomValues` is far better supported. It is also *more* random (128 bits versus UUID v4's 122, six being fixed markers) and shorter to encode. Dropping JSON and the name — which plan §6.3 already sends over the data channel — cuts the scanned URL from 190 to 94 characters and the QR from **73×73 to 53×53 modules at ecc=H** (measured with `uqr`, 14.3). That is 37% larger modules on screen, aimed squarely at the weakest link: a webcam reading a glossy panel from sofa distance. Field renamed `roomUuid` → `roomId` so nobody reaches for `randomUUID` again |
 | 45 | **File formats are a Mode B concern only; the library audit comes off the critical path** | Audit the library early, as the plan originally had it | In Mode A the Source decodes the file and re-encodes it as a WebRTC stream, so the TV never sees the container or file codec — only VP8/VP9/AV1/H.264, settled at runtime by `capabilities` (decision 42). Owner's correction: "It literally doesn't matter the format of the videos because Mode A works by sending a stream." The plan had scheduled work for a decision that may never be taken. Script kept at `scripts/audit-library.sh` for the gate that probably never opens |
-| 46 | **Field device reports: no backend, never silent, over the existing data channel** | A collection endpoint; silent background reporting | The Portal sends a `device-report` to the Source; the Source displays the exact payload and offers to send it as a prefilled GitHub issue or email from the user's own account. Keeps the "no backend of our own" goal (§1) intact and avoids quietly shipping data off a TV, which would undercut the privacy claim the product is actually sold on. Capabilities only: no filenames, no credentials, and deliberately no persistent identifier. Plan §12 |
-| 47 | **A Source tab joins only the room of the TV it has claimed, never every paired TV's room** | Join all paired rooms so the selector can show live online status | Joining all of them put two tabs in the same TV's room as two Sources — the exact cross-connection decision 8 exists to prevent — and wasted connections on the weakest device. Found by auditing §3 against §11.1's one-TV-per-tab rule, which contradicted it. Accepted cost: the TV selector cannot show online status before you pick a TV; it shows "Connecting…" instead |
+| 46 | **Field device reports: no backend, never silent, over the existing data channel** | A collection endpoint; silent background reporting | The Portal sends a `device-report` to the Source; the Source displays the exact payload and offers to send it as a prefilled GitHub issue or email from the user's own account. Keeps the "no backend of our own" goal (plan §1) intact and avoids quietly shipping data off a TV, which would undercut the privacy claim the product is actually sold on. Capabilities only: no filenames, no credentials, and deliberately no persistent identifier. Plan §12 |
+| 47 | **A Source tab joins only the room of the TV it has claimed, never every paired TV's room** | Join all paired rooms so the selector can show live online status | Joining all of them put two tabs in the same TV's room as two Sources — the exact cross-connection decision 8 exists to prevent — and wasted connections on the weakest device. Found by auditing plan §3 against plan §11.1's one-TV-per-tab rule, which contradicted it. Accepted cost: the TV selector cannot show online status before you pick a TV; it shows "Connecting…" instead |
 | 48 | **No `deviceId` anywhere** | Keep it in storage and in `hello` / `pair-ack` | It was stored and transmitted but never read. The room *is* the identity (plan §6.5) because each pairing mints a room nothing else can enter, so a separate id adds nothing. A leftover from the abandoned per-device-token scheme (§7.10). Removed rather than left to mislead whoever implements it |
+| 49 | **Keep two documents but stop them overlapping. The plan is the sole source of truth for the design; this file holds research, history and the decision log only, and the log is append-only** | Merge both into one file; keep both as they were | A consistency review on 2 October found the plan sound but eleven stale passages here, nearly all places this file restated the design and was not updated when the plan changed. Merging would produce one ~1,500-line file mixing current design with history. Removing the restatements (§2, §3.2–3.3, §6, §10, §11 now point at the plan) and never rewording old entries means a design change touches one plan section and adds one log line |
+| 50 | **Remote pairing mirrors Source↔Portal pairing: ephemeral `/remote/pair#…` QR, then a permanent `/remote#…` bookmark** | The Source's QR carries permanent credentials directly | The plan contradicted itself — `remote-pair` was specified as an ephemeral-room message while §11.3 said the scanned URL could be shared between phones. Making the QR single-use and short-lived matches the TV threat model (plan §5.3) and keeps the scanned URL at 49 bytes; sharing applies only to the permanent bookmark afterwards. Unlike `/pair`, `/remote/pair` joins on open, because the phone that scans it is the intended Remote |
+| 51 | **The Source owns the queue; the Portal holds a mirror** | Portal owns the queue as part of playback state; no stated owner | Plan §3 said the Portal owns playback state, including `status.queue`, while §11.1 persisted the working playlist on the Source — two owners, no tie-break. The Source holds the files, is where the drawer edits happen and survives the TV wiping its storage, so it is the authority; it re-sends the whole queue on every connect and change. The Portal still owns what is loaded, play state and position |
+| 52 | **Heartbeats come from the foreground device; the Source never pings** | Source pings its Remotes | The protocol had the Source pinging Remotes, which needs a timer — exactly what plan §9 rule 1 forbids in a background tab. A Remote is in the foreground whenever it is being used, so it pings the Source, the same way the Portal does |
+| 53 | **Pairing links live 10 minutes, not 90 seconds; still single-use** | 90 s; 15 minutes to 1 hour; no expiry at all | 90 s only worked on the sofa. The phase 3 friend flow sends pairing links over chat in both directions (their TV's link to me, my Remote link to them), and 90 s meant being on a call together. Guessing was never the threat — a 256-bit password cannot be guessed at any lifetime. What expiry protects against is a link left unused in a chat history, email or screenshot being opened later by whoever finds it. Single-use already kills a link the moment it pairs, so the window only matters for links nobody used; 10 minutes covers "send it, they open it" without leaving them lying around for hours. Owner's call |
 
 ---
 
@@ -434,7 +417,7 @@ The Scanbot survey the owner supplied is a vendor blog (they sell a commercial S
 
 ### 14.3b QR payload size, measured
 
-Measured locally with `uqr` (the library the Portal will use), encoding a full `https://portalcast.net/pair#…` URL at three error-correction levels:
+Measured locally with `uqr` (the library the Portal and Source will use), encoding a full `https://portalcast.net/pair#…` URL at three error-correction levels:
 
 | Encoding | URL | ecc=H | ecc=Q | ecc=M |
 |---|---|---|---|---|
@@ -521,17 +504,18 @@ BroadcastChannel                      chrome 54   firefox 38   safari 15.4   iOS
 
 ### 14.9 Still to verify on real hardware
 
-Ordered by how much depends on them:
+Ordered by how much depends on them. Mode A and pairing first; Mode B items last, since they only matter if its gate opens (decision 45).
 
 1. **Does `localStorage` survive a restart on each target TV?** Decides whether bookmarking is a convenience or the only pairing record.
 2. **Do URL fragments survive on each target TV browser?** Some are thin webview wrappers. If fragments are mangled, the storage-wipe fallback has no answer.
-3. **Codec audit:** `canPlayType()` against real codec strings on each TV, plus a scan of an actual library for MKV / HEVC / 4K / HDR share. Decides whether Mode B is essential, optional, or worthless without remuxing.
-4. **Is Opus stereo reachable through Trystero's `rtcPolyfill`?** Decides whether Mode A is acceptable for films at all.
-5. **Everything in 1–4 above is what the `/check` page should report** — for our own TVs and emulators (decision 25). For devices we will never touch, decision 46's field reports are the mechanism.
-6. **`crypto.randomUUID` and `crypto.subtle` on old TV browsers** — both need a secure context, which we have; availability on a 2019 Tizen is unknown. A `getRandomValues` fallback covers the UUID.
-7. **Does `addStream` need re-sending on `onPeerJoin`?** The README says it does; confirm against the source, because it shapes the upstream PR.
-8. **Service Worker ranged media on a real TV.** Tizen/webOS are Chromium so it should work, but it is unverified and Mode B depends on it entirely.
-9. **Scanning ergonomics:** real laptop webcams against real TV panels, at angles, with glare.
+3. **Is Opus stereo reachable through Trystero's `rtcPolyfill`?** Decides whether Mode A is acceptable for films at all. Proven end-to-end with `getStats()` in milestone 3 and recorded in `docs/quality.md`; `/check` can only show whether a TV's receiver *advertises* it.
+4. **`crypto.getRandomValues` and `crypto.subtle` AES-GCM on old TV browsers** — `subtle` needs a secure context, which we have; availability on a 2019 Tizen is unknown. Both are fatal if missing (plan §6.1). `randomUUID` is never called (decision 44).
+5. **Does `addStream` need re-sending on `onPeerJoin`?** The README says it does; confirm against the source, because it shapes the upstream PR.
+6. **Scanning ergonomics:** real laptop webcams against real TV panels, at angles, with glare.
+7. **Codec audit — Mode B only (decision 45).** `canPlayType()` against real codec strings on each TV, plus a scan of an actual library.
+8. **Service Worker ranged media on a real TV — Mode B only.** Tizen/webOS are Chromium so it should work, but it is unverified and Mode B depends on it entirely.
+
+**What `/check` covers:** items 1, 2 and 4, the TV half of 3 (advertised stereo) and of 7 (`canPlayType`), and 8's Service Worker registration — for our own TVs and emulators (decision 25). For devices we will never touch, decision 46's field reports are the mechanism.
 
 ---
 
@@ -591,7 +575,7 @@ What the application produced:
 
 **Three of those resolutions were then revised the same day**, after the owner reviewed them:
 - **The 3-minute auto-fall-through was dropped.** One threshold only: warn at ~20 s with Retry / Remove / *Pair a new source*, then retry forever. A TV left on must never abandon its pairing on its own and start showing a QR code to the room. Decision 37.
-- **TV-remote media keys were deferred, not kept.** "Remote keys without UI? How does that even work?" is the right question: the mechanism is `navigator.mediaSession` and no TV browser is verified to deliver it, a local pause would desync Mode A, and keys with no feedback feel broken. A probe went into `/check` instead. Decision 36.
+- **TV-remote media keys were deferred, not kept.** "Remote keys without UI? How does that even work?" is the right question: the mechanism is `navigator.mediaSession` and no TV browser is verified to deliver it *[later corrected: the mechanism is ordinary `keydown` events, which are easy to receive — see decision 36 and §14.10. The deferral stands on the other two reasons]*, a local pause would desync Mode A, and keys with no feedback feel broken. A probe went into `/check` instead. Decision 36.
 - **The Remote topology was decided** rather than left open: the Remote pairs directly with the Source in its own room. Decision 39, reasoning in plan §3.
 
 Section numbering in the plan was also reflowed at the same time (decision 41): the old "Page requirements" section was dissolved into the UI specs it duplicated, and the letter-suffixed sections became §8 and §11.1–11.4. **Line and section numbers quoted verbatim above therefore no longer resolve** — they refer to the document as it stood before the renumber.

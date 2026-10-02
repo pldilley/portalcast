@@ -2,10 +2,11 @@ import { defineConfig } from 'vite'
 import { resolve } from 'node:path'
 
 // `base` must match the path the site is actually served from.
-// A GitHub *user* page (<username>.github.io) serves from root, so '/' is correct.
-// A *project* page would need '/<repo>/' — see plan §4 for why we avoid that.
+// It is a GitHub *project* page, served from /<repo>/ — the user page
+// (<username>.github.io) is taken. See plan §4. When a domain arrives
+// (plan §15), this becomes '/'.
 export default defineConfig({
-  base: '/',
+  base: '/portalcast/',
   appType: 'mpa',
   build: {
     target: 'es2017', // TV browsers can be old — plan §4

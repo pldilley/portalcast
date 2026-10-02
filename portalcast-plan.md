@@ -6,6 +6,8 @@ The name is a nod to the game *Portal*: step in one side, come out the other. Vi
 
 This document is the starting brief for building the project from scratch. Read it fully before writing code. The companion file `portalcast-context.md` holds the research, competitor survey, verified browser facts, and reasoning behind each decision; read it before changing any decision here.
 
+**This file is the single source of truth for the current design.** `portalcast-context.md` records *why* — research, history and the decision log — and deliberately does not restate the design. If the two ever disagree, this file wins and the other is the one to fix. Any design change is: edit this file, then append one entry to the context decision log.
+
 > **Context §16 applied 30 September 2026.** `portalcast-context.md` §16 holds the verbatim review and the owner's answers that produced the Portal UI spec (§11.2), the narrower connection rule (§3) and several of the open questions in §15. It is kept as the raw record; this file is now the current design. Note that its own cross-references predate a later renumbering, and the single ~20 s pairing threshold (§6.7) superseded the dual-threshold scheme recorded there.
 
 ---
@@ -39,9 +41,9 @@ This document is the starting brief for building the project from scratch. Read 
 - **Source** — the page on the laptop that holds the video files (`/`). Picks files and sends video. In phases 1–2 it is also the controller.
 - **Remote** — the mobile page (`/remote`, installable as a PWA). Browses the library a Source has shared and controls playback on a Portal *through* that Source. Holds no video and talks to no Portal directly.
 - **Pair page** — a tiny page (`/pair`) that the TV's QR code points at. On a phone it offers to forward the link; on a laptop it offers to connect. It never joins a room by itself.
-- **Profile** — a named set on the Source: which files are shared, and which TVs are paired. "Family", "Mates", "Work". One profile is active per tab.
+- **Profile** — a named set on the Source: which files are shared, and which TVs and Remotes are paired. "Family", "Mates", "Work". One profile is active per tab.
 - **Signalling** — the brief "introduction" step where browsers swap connection details before they can talk directly. Trystero handles this using public relay networks.
-- **Room** — a named meeting point on the relay network. Peers in the same room with the same password connect to each other. In PortalCast every room holds exactly two peers: one Source and one Portal, or one Source and one Remote.
+- **Room** — a named meeting point on the relay network. Peers in the same room with the same password connect to each other. In PortalCast a room is minted per pairing, so it normally holds two peers: one Source and one Portal, or one Source and one Remote. The rule is only that strangers never share a room (§3).
 - **Data channel** — a direct pipe between two browsers for arbitrary messages and bytes.
 - **Service Worker** — a small background script that can answer a page's network requests itself. Used by the Remote PWA so it opens instantly, and — if Mode B is ever built — to feed file bytes to the TV's `<video>` element.
 - **STUN / TURN** — helper servers for connecting across the internet. STUN tells a device its public address. TURN relays encrypted traffic when a direct connection is impossible.
@@ -62,7 +64,7 @@ This document is the starting brief for building the project from scratch. Read 
  └─────────┬──────────┘   └─────┬───────────────┬─────┘   └──────────┬──────────┘
            │   room C           │               │   room A           │
            └────────────────────┘               └────────────────────┘
-                     every room holds exactly TWO peers
+               one room per pairing — strangers never share one
 
            1. find each other ──► public relays (Nostr) ◄── encrypted handshake
            2. then direct WebRTC only — no relay touches video or messages
@@ -76,15 +78,15 @@ This document is the starting brief for building the project from scratch. Read 
 - `/tv` — Portal.
 - `/` — Source (laptop-first, responsive).
 - `/pair` — the QR landing page (tiny, mobile-first).
-- `/remote` — Remote (mobile-first PWA, phase 3).
+- `/remote` — Remote (mobile-first PWA, phase 3), with `/remote/pair` as its QR landing page (§11.3).
 
-**The rule is: no cross-connection between parties that do not know each other.** Trystero connects every peer in a room to every other peer, so two Sources sharing a room would get direct connections to one another — that is what must never happen. Every pairing therefore mints a fresh room, which in practice means exactly two peers per room in every phase — including phase 3, because a Remote gets its own room rather than joining the Portal's.
+**The rule is: no cross-connection between parties that do not know each other.** Trystero connects every peer in a room to every other peer, so two Sources sharing a room would get direct connections to one another — that is what must never happen. Every pairing therefore mints a fresh room, which in practice means two peers per room in every phase — including phase 3, because a Remote gets its own room rather than joining the Portal's.
 
-Two peers per room is therefore what the design *does*, but it is not the rule and nothing should be derived from it. The rule permits a third known peer; the design simply never needs one, because a Remote gets its own room (below). Earlier drafts called two-peer rooms "an invariant" and reasoned from that; it overstated the requirement (see `portalcast-context.md` §16, answer 3).
+Two peers per room is therefore what the design *does*, but it is not the rule and nothing should be derived from it. The rule permits a third known peer; the design only ever produces one when a user copies a paired Remote's bookmark onto a second phone (§11.3) — two trusted Remotes and their Source, which the rule allows. Earlier drafts called two-peer rooms "an invariant" and reasoned from that; it overstated the requirement (see `portalcast-context.md` §16, answer 3).
 
 Consequences:
 - A **Source tab joins exactly one Portal room — the TV it has claimed** (§11.1) — plus one room per connected Remote. It does *not* join the rooms of the profile's other paired TVs. If it did, two tabs would both be peers in the same TV's room: two Sources in one room, which is the thing this rule exists to prevent, and wasted connections on the weakest device in the system.
-  - So a Source tab holds **1 Portal room + N Remote rooms**, every one of them a two-peer room. Only the Portal room is exclusive, enforced by the Web Lock (§11.1); Remotes need no lock because nothing is contended.
+  - So a Source tab holds **1 Portal room + N Remote rooms**, each normally a two-peer room. Only the Portal room is exclusive, enforced by the Web Lock (§11.1); Remotes need no lock because nothing is contended.
   - Consequence: the TV selector lists paired TVs **without live online status**, because knowing that would require joining them. Selecting one takes the Web Lock, joins that room, and shows "Connecting…". Honest, and it costs nothing.
 - A **Portal joins exactly one room at a time** — its *active Source*, chosen from the top-bar selector (§11.2). Anything not selected cannot reach the TV at all. This bounds memory on weak TV hardware, stops two households fighting over one screen, and means someone must be physically at the TV to change who controls it.
 - The same TV paired into two profiles is **two separate pairings**, two rooms.
@@ -92,6 +94,8 @@ Consequences:
 - **A Remote pairs directly with the Source, in its own room** — it never joins the Portal's room. Decided 30 September; see below.
 
 **The Portal owns playback state** (what's loaded, playing/paused, position). Everyone else sends commands to it and receives status from it. That keeps one source of truth even with a laptop and a phone controlling at once. Note this is independent of who generated the room credentials.
+
+**The Source owns the queue.** It holds the files, persists the working playlist (§11.1) and is the only place the queue is edited — a Remote's edits are proxied to it like everything else. The Portal keeps a **mirror** of the queue, received via `queue` (§10), only so it can auto-advance and report the queue in `status`. The Source re-sends the whole queue on every connect and on every change, so on any disagreement the Source's copy wins. This also means a TV that wipes its storage loses nothing.
 
 ### Where the Remote sits
 
@@ -129,7 +133,7 @@ Consequences recorded elsewhere: relay semantics in §10, Remote connection flow
 - **Rejected for the Source: MUI** (heaviest, runtime CSS-in-JS, more than this app needs) and **shadcn/ui** (good, smallest runtime, but Tailwind setup plus maintaining copied components — work with no payoff unless we expect to fight the library's styling).
 - **Cross-tab coordination:** the **Web Locks API** (`navigator.locks`), not `localStorage`. See §11.1.
 - **P2P:** [Trystero](https://github.com/dmotz/trystero) (`npm i trystero`, MIT). Default strategy is Nostr; keep the strategy import in one module so it can be swapped (MQTT, BitTorrent, or a self-hosted `@trystero-p2p/ws-relay`) without touching the rest of the code.
-- **QR generation (Portal):** [`uqr`](https://www.npmjs.com/package/uqr) — MIT, zero dependencies, renders to SVG. SVG scales to any TV resolution without canvas. Avoid `qrcode`, which drags in `yargs` and `pngjs`.
+- **QR generation (Portal, and the Source for Remote pairing, §11.3):** [`uqr`](https://www.npmjs.com/package/uqr) — MIT, zero dependencies, renders to SVG. SVG scales to any TV resolution without canvas. Avoid `qrcode`, which drags in `yargs` and `pngjs`.
 - **QR scanning (Source):** [`barcode-detector`](https://www.npmjs.com/package/barcode-detector) — MIT, actively maintained, a ponyfill of the standard `BarcodeDetector` API backed by ZXing-C++ WASM. Write against the standard API once: native fast path where it exists, WASM everywhere else. **Do not rely on native `BarcodeDetector` alone** — see the compatibility table in `portalcast-context.md`.
 - **Hosting: GitHub Pages** to start. **HTTPS is required** for Service Workers, `getUserMedia`, PWA install, and a secure context — and note `localhost` counts as secure but **a TV cannot reach your localhost**, so every TV test needs a deployed URL from day one.
   - **A path prefix is acceptable.** A *project* page serves from `/<repo>/`, making the routes `/portalcast/tv`. The obvious fix — a *user* page (`<username>.github.io`), which serves from root — is unavailable, since that repo is already in use. This is fine: the only people typing a URL on a TV are the owner and a few friends, all of whom can manage a long one, and `/check` is never a public artefact (§13 milestone 1b). Root paths become worth having when the domain arrives (§15), not before.
@@ -174,10 +178,10 @@ Before coding, check the current Trystero README for exact option names (`joinRo
 | Risk | Cover |
 |---|---|
 | No `password` given → Trystero derives the key from app ID + room ID, which a relay operator could reverse | **Always pass a password.** Never rely on the default |
-| Someone photographs or intercepts the QR during its short life, and pairs instead of you | Ephemeral credentials are **single-use** (the room closes the moment the first Source pairs) and **short-lived** (90 s). Worst case is a stranger casting to your TV; the TV holds no data of yours. The active-Source list on the Portal has a Remove option |
+| Someone photographs or intercepts the QR during its short life, and pairs instead of you | Ephemeral credentials are **single-use** (the room closes the moment the first Source pairs) and **short-lived** (10 minutes — long enough to send a link to a friend, short enough that a forgotten link in a chat history dies). Worst case is a stranger casting to your TV; the TV holds no data of yours. The active-Source list on the Portal has a Remove option |
 | Stale QR photographed and used later | Dead on expiry. Permanent credentials are minted fresh at pairing and are never the same as the ephemeral ones |
 | A second Source tries to take over the TV | It cannot. The Portal only ever joins its one selected room. Switching requires someone at the TV |
-| A Source requests a file it was never offered | Every `fileId` is a random opaque handle minted per profile per file, never a path or a name. The Source checks membership in the active profile's shared list on every request |
+| A Portal or Remote requests a file it was never offered | Every `fileId` is a random opaque handle minted per profile per file, never a path or a name. The Source checks membership in the active profile's shared list on every request |
 | **A Remote has a direct data channel to the Source** — including, in phase 3, a friend's Remote reaching my laptop | By design (§3): the Remote's room *is* a Source room, and it needs that channel for thumbnails and library data. **The `fileId` allowlist is therefore the guard, not room isolation** — enforce it on every byte-serving request, never as a formality. Mitigated by the Remote having its own room, so it is revocable on its own without touching any TV's credentials |
 | Public relays are unreliable | Configure `relayConfig.urls` with several known-good relays, or `redundancy`, and surface relay failures in the debug panel. A self-hosted `ws-relay` is the fallback plan |
 
@@ -198,14 +202,14 @@ activeRoomId            // which one it is currently listening to
 ```
 profiles: [ { profileId, name,
               tvs:     [ { roomId, roomPassword, tvName,     pairedAt, lastSeen } ],
-              remotes: [ { roomId, roomPassword, remoteName, pairedAt, lastSeen } ],
-              files:   [ … ] } ]
+              remotes: [ { roomId, roomPassword, remoteName, pairedAt, lastSeen } ] } ]
 activeProfileId
 ```
+File metadata, thumbnails and file handles are **not** here — they live in IndexedDB, keyed by `profileId` and `fileId` (§8), because `localStorage` cannot hold handles or binary thumbnails. The working playlist is keyed by the TV's `roomId` (§11.1).
 
-**Remote** (`localStorage`, plus the URL fragment as the portable copy — mirrors the Portal's shape):
+**Remote** (`localStorage`, plus the URL fragment as the portable copy — same shape as the Portal):
 ```
-sources: [ { roomId, roomPassword, sourceName, pairedAt } ]
+sources: [ { roomId, roomPassword, sourceName, pairedAt, lastSeen } ]
 activeRoomId
 ```
 
@@ -229,8 +233,12 @@ The QR encodes a URL so that a phone camera does something useful with it. The S
 
 | URL | Opened on | Meaning | Scanned? |
 |---|---|---|---|
-| `/pair#…` | Source, or a phone forwarding it | **Ephemeral** credentials for a pairing in progress | **Yes** — keep it as short as possible |
+| `/pair#…` | Source, or a phone forwarding it | **Ephemeral** credentials for a Source↔Portal pairing in progress | **Yes** — keep it as short as possible |
 | `/tv#…` | Portal | **Permanent** credentials for one pairing, bookmarkable | No — length does not matter |
+| `/remote/pair#…` | Remote (the phone that scanned it) | **Ephemeral** credentials for a Source↔Remote pairing in progress (§11.3) | **Yes** — same 49-byte layout as `/pair` |
+| `/remote#…` | Remote | **Permanent** credentials for one Remote pairing, bookmarkable | No |
+
+`/remote/pair` *does* join on open, unlike `/pair`: the phone that scans the Source's QR is the intended Remote, so there is nobody else for it to steal the pairing from.
 
 `portalcast.net` is a **placeholder** throughout this document — the domain is still undecided (§15).
 
@@ -256,6 +264,8 @@ The TV's name is deliberately **absent**: §6.3 step 3 already sends `tvName` ov
 
 The chosen form at the *highest* error correction is coarser than the JSON form at the *lowest*. On a 1080p TV displaying an 800 px QR that is 15.1 px per module instead of 11.0 — **37% larger modules**, which goes directly at the weakest link in this design: a laptop webcam reading a glossy panel from sofa distance at an angle (§6.4).
 
+**These figures assume a short domain.** Until one exists the site is served from a GitHub Pages project path (§4), which makes the URL `https://<user>.github.io/portalcast/pair#…` — **109 characters, 57 × 57 modules at ecc=H** (measured with `uqr`, border excluded), or 14.0 px per module. Still far better than any JSON form, so nothing is blocked; a short domain recovers the remaining 7%.
+
 Use **ecc=H** and spend the headroom on robustness rather than on a smaller code.
 
 **Permanent payload — same layout plus a name**, since it is bookmarked and never scanned:
@@ -265,15 +275,15 @@ byte 0        version
 bytes 1–16    roomId
 bytes 17–48   password
 byte 49       name length in bytes
-bytes 50…     sourceName / tvName, UTF-8
-              → base64url → /tv#<…>
+bytes 50…     sourceName, UTF-8 — the Source this device belongs to
+              → base64url → /tv#<…> (Portal) or /remote#<…> (Remote)
 ```
 
 **No UUIDs anywhere.** 16 random bytes from `getRandomValues` give 128 bits; UUID v4 gives 122, because six bits are fixed version and variant markers. The raw form is also shorter to encode (22 base64url characters versus 36 for a formatted UUID) and `getRandomValues` is supported far more widely than `crypto.randomUUID`. The field is called `roomId`, matching Trystero's own parameter name — never `roomUuid`, which would invite someone to reach for `randomUUID`.
 
 ### 6.3 Pairing flow
 
-1. **Portal:** user picks **"Add a new source"** from the top-bar selector (§11.2). The Portal generates ephemeral `{roomId, roomPassword}`, joins that room, and displays a large full-screen QR code with a 90-second countdown.
+1. **Portal:** user picks **"Add a new source"** from the top-bar selector (§11.2). The Portal generates ephemeral `{roomId, roomPassword}`, joins that room, and displays a large full-screen QR code with a 10-minute countdown.
 2. **Source:** user opens the scanner (`getUserMedia` + `barcode-detector`), points the laptop at the TV, and the QR decodes. The Source joins the ephemeral room.
 3. **Portal:** on peer join, mints **fresh permanent** `{roomId, roomPassword}` for this Source and sends them over the data channel with its `tvName`. The Portal switches to a loading screen immediately, so the user turning the laptop back around sees that it worked.
 4. **Source:** stores the record under the active profile, replies with `sourceName`. The Portal stores its own entry and sets it active.
@@ -304,7 +314,7 @@ fragment absent   → use localStorage's activeRoomId
 neither           → show the "Add a source" / QR screen
 ```
 
-The Source joins the stored room for every TV in the active profile. Room membership plus a 256-bit password is the entire proof of identity; nothing further is exchanged. `hello` still declares roles, and a second peer claiming `portal` in a two-peer room is rejected.
+The Source joins **only the room of the TV this tab has claimed** (§3, §11.1) — never every TV in the profile — plus one room per paired Remote. Room membership plus a 256-bit password is the entire proof of identity; nothing further is exchanged. `hello` still declares roles, and a second peer claiming `portal` in a two-peer room is rejected.
 
 **Why the fragment matters.** Many built-in smart TV browsers clear `localStorage` and cookies between sessions, which would mean re-pairing every time. A bookmarked `/tv#…` URL survives that, so on those TVs the bookmark *is* the pairing record and `localStorage` is only a cache. Because the Portal talks to one Source at a time, one bookmark per Source is a complete representation — switching Source on such a TV is just opening the other bookmark.
 
@@ -374,7 +384,7 @@ Measure with `getStats()` on real hardware; treat any specific bitrate number as
 3. **This must happen before the offer is created**, since `setCodecPreferences` only affects the next negotiation. Trystero builds the offer internally, so this lands on the same `sdpTransform` / `rtcPolyfill` gap as the Opus settings (§4).
 4. Re-send on every connect rather than caching — a TV firmware update can change what it decodes.
 
-The `/check` page probes the same API, but for a different purpose: telling a user in advance whether a TV model is worth trying, and seeding `docs/devices.md`. The product itself never relies on it.
+The `/check` page probes the same API, but for a different purpose: telling *us*, during development, whether a TV model is worth trying, and seeding `docs/devices.md`. The product itself never relies on it.
 
 **What cannot be controlled:** `maxBitrate` is a ceiling, not a floor. Congestion control will always lower the bitrate when it sees loss or delay, and the standard API has no `minBitrate`. Realtime encoders also skip B-frames, so WebRTC video at a given bitrate is worse than a file encoded at the same bitrate. On a LAN you compensate with headroom; over the internet you cannot.
 
@@ -418,7 +428,7 @@ Requirements:
 **File formats matter only here.** This is the one place a TV must decode the original file, so container and codec support decide whether Mode B works at all. In Mode A they are irrelevant: the Source decodes and re-encodes, and the TV only ever sees VP8/VP9/AV1/H.264, settled at runtime by `capabilities` (§10).
 
 ### Later: MKV support
-Remux MKV → MP4 in the Source browser with ffmpeg.wasm (no re-encode) when codecs allow. Remuxing also helps Mode B directly, because we then control the output container and can force `faststart` so the `moov` index sits at the front, removing the initial-load stall. Out of scope until Modes A and B work.
+Remux MKV → MP4 in the Source browser with ffmpeg.wasm (no re-encode) when codecs allow. Remuxing also helps Mode B directly, because we then control the output container and can force `faststart` so the `moov` index sits at the front, removing the initial-load stall. Out of scope for now: in Mode A it only matters for MKV files the Source browser itself cannot open, and Mode B is parked.
 
 ---
 
@@ -460,12 +470,12 @@ The Source is a normal browser tab, and browsers save power by slowing down or s
 
 **Design rules that make this work**
 1. **Be message-driven on the Source, not timer-driven.** Answer range requests and commands when they arrive over the data channel, instead of using `setInterval` loops. Incoming network messages keep being processed in background tabs even while timers are slowed.
-2. **Heartbeats come from the Portal**, which is always the visible, foreground tab. The Source only replies.
+2. **Heartbeats come from the foreground device, never the Source.** The Portal pings the Source; a Remote pings the Source while the phone is awake. The Source only replies, so it has no timers to be throttled.
 3. **Mode A keeps the tab "busy" naturally**, because it's playing media and streaming. For Mode B, consider playing the file muted in the Source tab too, as a mirror; test whether this helps each browser avoid discarding it.
 4. **Use the Page Lifecycle events** (`visibilitychange`, `freeze`, `resume`, `pagehide`) to detect trouble, and reconnect automatically on `resume`.
 5. **Tell the user plainly.** On the Source: "Keep this tab open and your laptop awake while watching." Show a clear warning on the Portal if the Source stops responding ("Paul's laptop went to sleep").
 6. **Screen Wake Lock** (`navigator.wakeLock.request('screen')`) keeps the screen on only while the tab is visible, so it helps on the Portal, not on a background Source tab.
-7. **Remote reconnection:** the Remote will be suspended whenever the phone locks. It must rejoin its room quickly on `visibilitychange` and fetch fresh status from the Portal. It never holds anything important itself, so this is harmless.
+7. **Remote reconnection:** the Remote will be suspended whenever the phone locks. It must rejoin its room quickly on `visibilitychange` and fetch fresh status from the Source, which relays the Portal's latest `status` (§3) — a Remote never talks to a Portal. It never holds anything important itself, so this is harmless.
 
 ---
 
@@ -473,7 +483,7 @@ The Source is a normal browser tab, and browsers save power by slowing down or s
 
 All messages are typed in a shared `protocol.ts`. Keep every send targeted — export only a `sendTo(peerId, msg)` wrapper, never an untargeted broadcast.
 
-**The Source is a router.** Because a Remote lives in its own room (§3), it never speaks to a Portal directly. The Source forwards `status` outward to each connected Remote and forwards `control` / `select` / `queue` inward to the active Portal. `library`, `thumb` and `remote-pair` are Source↔Remote only and are never relayed.
+**The Source is a router.** Because a Remote lives in its own room (§3), it never speaks to a Portal directly. The Source forwards `status` outward to each connected Remote and forwards `control` / `select` inward to the active Portal. Queue edits from a Remote are *not* forwarded: the Source applies them to its own queue and sends the Portal a fresh `queue` (§3). `library`, `thumb`, `remote-pair` and `remote-pair-ack` are Source↔Remote only and are never relayed.
 
 | Action | Direction | Payload |
 |---|---|---|
@@ -485,9 +495,10 @@ All messages are typed in a shared `protocol.ts`. Keep every send targeted — e
 | `unpair` | either direction | `{}` — the other side deletes its record |
 | `library` | Source → Remote, direct | `{ items: [{ fileId, name, duration, size, mime, thumbId? }] }` — `fileId` is a random opaque handle minted per profile |
 | `remote-pair` | Source → Remote (ephemeral room only) | `{ roomId, roomPassword, sourceName }` — the Source mints the Remote's permanent room, mirroring §6.3 |
+| `remote-pair-ack` | Remote → Source (ephemeral room only) | `{ remoteName }` — mirrors `pair-ack` |
 | `thumb` (request kind) | Remote → Source, direct | request `{ thumbId }` → response JPEG ArrayBuffer |
 | `select` | Source → Portal (relayed for a Remote) | `{ fileId, startAt? }` |
-| `queue` | Source → Portal (relayed for a Remote) | `{ fileIds: string[] }` |
+| `queue` | Source → Portal, on every connect and every change | `{ fileIds: string[] }` — the whole queue, replacing the Portal's mirror. The Source owns the queue (§3); a Remote's edits go to the Source, which then sends this |
 | `load` | Portal → Source | `{ fileId, mode: 'A' \| 'B' }` |
 | `control` | Source → Portal. From a Remote it goes Remote → Source → Portal | `{ cmd: 'play' \| 'pause' \| 'seek' \| 'volume' \| 'next' \| 'prev' \| 'stop', value? }` |
 | `source-control` | Portal → Source (Mode A only) | same shape as `control`, applied to the hidden video |
@@ -497,7 +508,8 @@ All messages are typed in a shared `protocol.ts`. Keep every send targeted — e
 | `stream-close` | Portal → Source (Mode B) | `{ fileId }` — on seek or stop |
 | `range` (request kind) | Portal → Source | request `{ fileId, start, end }` → response ArrayBuffer. Kept for genuine one-off reads, such as probing the `moov` box |
 | `subtitles` | Source → Portal | `{ fileId, vtt: string }` (convert SRT → VTT on the Source) |
-| `ping` / `pong` | Portal → Source, and separately Source → Remote | Liveness, within each two-peer room. A Portal can never ping a Remote — they share no room (§3) |
+| `ping` / `pong` | Portal → Source, and separately Remote → Source | Liveness, within each two-peer room. Always sent by the foreground device; the Source only answers (§9). A Portal can never ping a Remote — they share no room (§3) |
+| `device-report` | Portal → Source | **Deferred (§12)** — capabilities only, shown to the user before anything leaves the Source |
 
 Every `fileId` arriving at the Source is checked against the active profile's shared list before any bytes are read.
 
@@ -547,6 +559,8 @@ Every `fileId` arriving at the Source is checked against the active profile's sh
 
 **Bottom bar** is slim and fixed: transport controls, scrub bar, volume, and the TV selector.
 
+**Keyboard shortcuts** for transport (play/pause, seek, next/previous, volume) via Mantine's `useHotkeys`, on the Source and the Remote alike. This is where playback control lives instead of the TV remote's media keys (§11.2, `portalcast-context.md` decision 36).
+
 #### File list
 
 - Ordered by date added. Hover gives the row a border and shadow.
@@ -588,6 +602,8 @@ Opens from the right. Contains: reorder (drag), remove, repeat one / repeat all,
 - **Before a TV is selected** there is no key, so hold the draft in `sessionStorage` — per-tab by definition, survives reload, dies with the tab. Promote it to the TV's key on selection.
 - Removing a pairing deletes its playlist; the `fileId`s were profile-scoped anyway.
 
+This copy is the authoritative queue (§3). On connect the Source sends it to the Portal with `queue`, overwriting whatever the Portal held.
+
 **Division of labour:** working playlist is TV-scoped and automatic; snapshots are profile-scoped and explicit. So "save this queue and load it in the bedroom later" is a thing the model supports.
 
 #### Claiming a TV across tabs — use Web Locks
@@ -606,7 +622,7 @@ Every control lives next to the thing it affects, which also keeps them off the 
 |---|---|
 | Select TV, add a TV (QR scanner), manage and rename TVs | **TV button, bottom bar** → popover listing paired TVs, ending in "Add a TV…" and "Manage" |
 | Switch profile, rename, delete, password (later) | **Profile selector**, top right |
-| Remote QR code (phase 3) | TV popover — it concerns a screen |
+| Pair a Remote (QR code), list and revoke Remotes (phase 3) | **Profile selector** — a Remote pairs with the Source, not a TV (§3), and its record lives in the profile's `remotes[]` |
 | Add files | Above the file list, as the primary action |
 
 Rejected: a row of 2–4 buttons above the file list. "Select TV" would then sit in the bottom bar while "manage TVs" sat at the top, splitting one concept across the screen, and anything above the list scrolls away.
@@ -643,7 +659,7 @@ Entered on load when a stored pairing exists.
 Entered when never paired, when the user presses **Pair a new source** or picks "Add a new source" from the selector, or after `/tv/reset`. **Never entered automatically from a failure** — see state A.
 
 - Small caption: **"Ready to pair with a new source"**.
-- **Giant QR code**, high contrast, wide quiet zone, high error correction, with its 90-second countdown (§6.3).
+- **Giant QR code**, high contrast, wide quiet zone, high error correction, with its 10-minute countdown (§6.3).
 - The top-bar selector **stays live**, so a user who just wants a different known Source is never forced through pairing.
 - If the user arrived here from a failing Source, carry that context: a line near the bottom naming it — **"last source ‹name› was not accessible"** — with **Retry** and **Remove**, so pairing afresh is not the only way out.
 - On success → the bookmark step (§6.5), then state A's "waiting for the cast".
@@ -694,7 +710,7 @@ Everything is reachable with arrows, OK and Back. Because the UI is a top bar pl
 **The Remote is the Source UI.** Same layout, same file list, same playlist drawer, same bottom transport bar — with two differences:
 
 1. **The profile switcher is replaced by a remote icon**, which offers **Disconnect**. A Remote does not own profiles; it borrows the Source's active one.
-2. **Every action is proxied.** The Remote sends intent to the Source (or the Portal, per §10) rather than acting locally. It holds no files and no authority.
+2. **Every action is proxied.** The Remote sends intent to the Source, which applies it or relays it to the Portal (§10). It never talks to a Portal, and holds no files and no authority.
 
 Sharing the component tree with the Source is the point — it is the same React/Mantine app with a different mode flag, not a second UI.
 
@@ -706,10 +722,15 @@ It is **mobile-first but the same vertical file list**, not a grid — an earlie
 
 The Remote pairs with the **Source**, never with a TV (§3).
 
-- **Primary:** scan a QR code shown by the **Source**, which opens the Remote URL directly on the phone.
-- **Fallback:** the Source offers **copy the URL**, so it can be sent by message, email or AirDrop — the same pattern as the `/pair` fallback (§6.4), for when scanning is impractical.
-- **One room per Remote pairing**, minted by the Source exactly as a Portal mints one for a Source (§6.3) — so each Remote is independently revocable. Sharing the same URL between two phones puts both in one room, which is harmless since both are trusted, but they cannot then be revoked separately. Scan once per device for clean revocation.
-- The Remote stores the same shape the Portal does — `{ roomId, roomPassword, sourceName, pairedAt }` — since both are "a device remembering which Source it belongs to". Schema in §6.1, with the URL fragment as the portable copy. Separately, the Source records the Remote in its profile's `remotes[]`.
+Same two-step shape as Source↔Portal pairing (§6.3), with the roles mirrored — the Source displays the QR, so it owns and mints the room:
+
+1. **Source:** "Pair a Remote" in the profile selector mints ephemeral credentials, joins that room and shows a QR of `/remote/pair#…` with a 10-minute countdown.
+2. **Phone:** the ordinary camera app opens the link; the page joins the ephemeral room.
+3. **Source:** mints **fresh permanent** credentials and sends them with `remote-pair`; the Remote replies `remote-pair-ack`. Both leave the ephemeral room and join the permanent one. The Source records the Remote in its profile's `remotes[]`.
+4. **Remote:** rewrites its URL to `/remote#<permanent payload>` and stores `{ roomId, roomPassword, sourceName, pairedAt, lastSeen }` — the same shape as the Portal, since both are "a device remembering which Source it belongs to" (§6.1).
+
+- **Fallback:** the Source offers **copy the link** to the same ephemeral `/remote/pair#…` URL, so it can be sent by message, email or AirDrop when scanning is impractical. It is single-use and dies after 10 minutes, like any pairing link.
+- **One room per Remote pairing**, so each Remote is independently revocable. Copying a paired phone's *permanent* `/remote#…` bookmark to a second phone puts both in one room — harmless, since both are trusted, but they can then only be revoked together. Pair once per device for clean revocation.
 
 ---
 
@@ -725,7 +746,7 @@ Tiny, mobile-first, and **it never joins a room on its own** — if it did, a ph
 
 ## 12. Deferred: device reports from the field
 
-**Status: wanted, shape agreed, not scheduled.** The problem is real — we own two TVs and an emulator, and `/check` (§13 milestone 1b) only ever covers devices we or a friend deliberately point at it. **This is the only plan for data from devices we will never touch**; an earlier idea of asking strangers to run `/check` themselves was dropped as unrealistic. Once there are real users, their Portals already know exactly what we need: receive codecs, storage persistence, fragment survival, which remote keys arrive.
+**Status: wanted, shape agreed, not scheduled.** The problem is real — we own two TVs plus the Tizen and webOS emulators, and `/check` (§13 milestone 1b) only ever covers devices we or a friend deliberately point at it. **This is the only plan for data from devices we will never touch**; an earlier idea of asking strangers to run `/check` themselves was dropped as unrealistic. Once there are real users, their Portals already know exactly what we need: receive codecs, storage persistence, fragment survival, which remote keys arrive.
 
 **It needs no backend, and it must not be silent.**
 
@@ -759,7 +780,7 @@ If aggregate telemetry at scale is ever genuinely wanted, that is a separate dec
    | Probe | Decides |
    |---|---|
    | `RTCRtpReceiver.getCapabilities('video')` | Whether this TV model is worth trying at all, and seeds `docs/devices.md`. **The product does not rely on this page** — the Portal reports the same thing over `capabilities` at connect time (§7) |
-   | `getCapabilities('audio')`, Opus stereo in the SDP | Whether film audio is viable at all |
+   | `getCapabilities('audio')`, Opus stereo in the SDP | Whether the TV's receiver *advertises* stereo Opus — necessary but not sufficient. Whether stereo actually arrives is proven end-to-end with `getStats()` in milestone 3 (`docs/quality.md`), never from the SDP (§7) |
    | `localStorage` survives a browser restart | Whether bookmarking is a convenience or the *only* pairing record (§6.5) |
    | URL fragment survives navigation and bookmarking | Whether the storage-wipe fallback works on webview-wrapper browsers |
    | `getRandomValues`, and **`crypto.subtle` AES-GCM** | Both fatal if missing: `getRandomValues` generates every credential, AES-GCM is what Trystero needs to encrypt the handshake. `randomUUID` is reported for information only — we never call it (§6.2) |
@@ -790,7 +811,7 @@ If aggregate telemetry at scale is ever genuinely wanted, that is a separate dec
 - **Mobile Remote PWA** (§11.3) is the main deliverable — the Source UI in Remote mode, not a second UI. It works the same whether the Source is in the same house or across the internet.
 - **Profiles are the sharing boundary.** A friend gets their own profile, so they see only the files it contains, in a room no other Source is in.
 - **Internet connections, direct only:** most home-to-home WebRTC connections work directly with STUN. Some networks (strict routers, mobile carriers, offices) can't connect without a TURN relay; in phase 3 these fail. Detect this via Trystero's `onJoinError` (SDP exchanged but no direct connection) and show a clear message: "Couldn't connect directly to this TV's network. Try another network, or both devices on the same Wi-Fi." Log how often this happens so phase 4 is sized on real data.
-- **Default to Mode A over the internet**, since WebRTC adjusts quality to the available bandwidth and the Source's upload is otherwise a hard floor. Offer Mode B when the connection is fast enough.
+- **Mode A over the internet**, since WebRTC adjusts quality to the available bandwidth. Mode B stays parked here too (§7): even if the gate ever opens for the LAN, the Source's upload becomes a hard floor over the internet.
 - **Data, not pixels:** the Remote renders its own UI from the `library` and `status` messages. Streaming the Source tab to control it was rejected: it needs a screen-share prompt every time and still can't be clicked from another device without a translation layer.
 - Seeks travel Remote → Source → Portal (§3), so the **Remote** must update its own scrub bar optimistically and reconcile against `status`, or the UI will feel broken. Two hops, not one.
 - A TV-remote-only library browser on the Portal can come later, reusing the same messages.
@@ -808,7 +829,7 @@ If aggregate telemetry at scale is ever genuinely wanted, that is a separate dec
 
 - **Unit:** credential generation, QR payload encode/decode, fragment parsing and precedence rules, profile and `fileId` allowlist checks, SRT→VTT, range header parsing, protocol message validation.
 - **Local multi-tab test:** open `/tv`, `/` and `/remote` in three browser windows on one machine. Pairing needs a camera, so provide a test hook to inject a QR payload directly rather than scanning.
-- **Automated:** Playwright with three browser contexts for pairing (via the injection hook), roles, Mode A, Mode B, and Remote control.
+- **Automated:** Playwright with three browser contexts for pairing (via the injection hook), roles, Mode A, and Remote control. (Mode B only if its gate opens, §7.)
 - **Mode A quality:** `getStats()` measurements of bitrate, resolution, framerate and codec, with and without the tuning set, recorded in `docs/quality.md`. Confirm stereo audio actually arrives. Also record laptop CPU and battery over a full film — that is the number the Mode B gate turns on.
 - **Library audit — Mode B only, NOT on the critical path.** `scripts/audit-library.sh ~/Movies` reports container, codec, resolution and HDR distribution plus what fraction would play directly on a basic TV. **Only run it if the Mode B gate opens** (§7). In Mode A the Source decodes the file and re-encodes it as a WebRTC stream, so the TV never sees the container or the file codec and the library's format mix is irrelevant.
 - **Emulators** where real hardware is missing: Tizen Studio and the webOS TV SDK both ship free TV emulators. Not trustworthy for codec support, but fine for Service Workers, fragments, storage behaviour and `canPlayType` shape.
@@ -824,12 +845,12 @@ If aggregate telemetry at scale is ever genuinely wanted, that is a separate dec
 
 - Domain for PortalCast — `portalcast.tv` is the current candidate. **Nothing is blocked on it:** the only people typing a URL on a TV are the owner and a few friends, and the permanent pairing is a bookmark thereafter (§6.5). Also check trademark clearance: "Portal" is a Valve game and was also a Meta device name, so avoid their logos or artwork and check the combined name.
 - Which default relays to pin in `relayConfig.urls`, and whether to self-host a `ws-relay` from day one for reliability.
-- **Is tuned Mode A good enough on a LAN at 1080p?** The single most valuable early measurement, and the only one that matters: if yes, Mode B is never built and the library's formats never matter. Answered by the Mode A quality measurements in §13.
+- **Is tuned Mode A good enough on a LAN at 1080p?** The single most valuable early measurement, and the only one that matters: if yes, Mode B is never built and the library's formats never matter. Answered by the measurements taken in milestone 3 (§13) and recorded in `docs/quality.md` (§14).
 - Worth considering as a Mode B alternative: let two Sources connect and simply **transfer the whole file**, so a friend plays it locally. Sidesteps streaming entirely, but turns the project into a file-transfer app as well. Not designed.
 - **Subtitles: burn into the Mode A capture at the Source, or overlay as text on the Portal?** The `subtitles` protocol message (§10) already assumes the second. Trade-off:
   - *Burn in:* works on any TV regardless of its capabilities, costs a canvas compositing step in the capture pipeline, and is then unstyleable and un-toggleable from the TV.
   - *Overlay:* toggleable and styleable, needs the cue list shipped over the data channel and TV-side timing against `status`.
   - **Embedded MKV tracks are unaddressed under either option** — sidecar `.srt`/`.vtt` only (milestone 5). Extraction needs ffmpeg.wasm or a JS demuxer, and LocalMovieSync already does it, so it is table stakes (`portalcast-context.md` §8.2).
 - **Does `+` add to the end of the playlist, or open a two-option menu?** (§11.1.) Adding directly is one click for the common case; the menu is more discoverable but slower every time.
-- Whether the Source can share with several friends' Portals simultaneously, and how much upload bandwidth that realistically allows.
+- How many friends' Portals one laptop can serve at once. The mechanism is already settled — one tab per Portal (§11.1) — so the open part is upload bandwidth and CPU, since each tab is its own Mode A encode.
 - Phase 4: which TURN approach to use and how to pay for or cap it (see phase 4 notes).
