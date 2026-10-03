@@ -49,6 +49,8 @@
 <body>
 
 <h1>PortalCast device check</h1>
+<p class="sub" style="margin:0 0 8px">Page version <code>__CHECK_BUILD__</code> &mdash; if this has not changed after an
+update, the TV is showing a cached copy (GitHub Pages lets browsers keep a page for up to 10 minutes).</p>
 <p class="sub">A development instrument. It inspects the browser and prints what it finds.
 Nothing leaves this device unless you press <em>Send report</em> at the bottom.</p>
 
@@ -73,6 +75,9 @@ Nothing leaves this device unless you press <em>Send report</em> at the bottom.<
   reopen it, and come back here. If "survived a restart" says no, this TV needs the
   bookmark fallback (plan &sect;6.5).
 </p>
+<p class="sub">Some browsers restore everything on restart, which hides it from this page. If you
+<em>have</em> fully restarted and it still says "not tested yet", press this:</p>
+<div><button id="b-restarted">I fully restarted the browser and came back</button></div>
 
 <h2>URL fragment &mdash; does the bookmark fallback work?</h2>
 <table id="t-fragment"></table>
@@ -147,6 +152,18 @@ advance whether a TV is worth trying.</p>
   var REPORT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbw_iCYwQBtaa-XrabDGYWOHC7avMchbL4FqABLg7njt23IQI8SyZfRZWBsHq58PKuItpA/exec';
   var REPORT_VERSION = 1;
 
+  /* Replaced at build time with the commit and build time (vite.config.ts). */
+  var CHECK_BUILD = '__CHECK_BUILD__';
+
+  /*
+   * Probes that answer asynchronously (crypto, userAgentData). Send report
+   * waits for them, otherwise a report could carry "testing…" — which would
+   * also give the same device a different hash.
+   */
+  var pending = 0;
+  function startPending() { pending++; }
+  function donePending() { if (pending > 0) pending--; }
+
   var results = {};   /* section -> array of [key, value, verdict] */
   var keyLog = [];
 
@@ -175,6 +192,15 @@ advance whether a TV is worth trying.</p>
     try { return !!(obj && prop in obj); } catch (e) { return false; }
   }
 
+  /* Replace the value and verdict of an existing row, then redraw its table. */
+  function setRow(section, tableId, label, value, v) {
+    var rows = results[section] || [];
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i][0] === label) { rows[i][1] = String(value); rows[i][2] = v || ''; }
+    }
+    render(tableId, section);
+  }
+
   function yn(v) { return v ? 'yes' : 'no'; }
   function verdict(v) { return v ? 'ok' : 'no'; }
 
@@ -185,6 +211,58 @@ advance whether a TV is worth trying.</p>
   add('device', 'Page URL', location.href);
   add('device', 'Secure context', yn(window.isSecureContext), verdict(window.isSecureContext));
   add('device', 'Checked at', new Date().toISOString());
+  add('device', 'Page version', CHECK_BUILD);
+
+  /*
+   * User-Agent Client Hints (Chromium only). The classic user agent is often
+   * frozen or generic, and some TV browsers pretend to be desktop; these are
+   * the browser's own structured answer, including the real model and full
+   * version when asked. Missing on Firefox and Safari — that is expected.
+   */
+  var uad = navigator.userAgentData;
+  if (uad) {
+    var brandList = [];
+    try {
+      for (var bi = 0; bi < (uad.brands || []).length; bi++) {
+        brandList.push(uad.brands[bi].brand + ' ' + uad.brands[bi].version);
+      }
+    } catch (eb) {}
+    add('device', 'UA-CH brands', brandList.join(', ') || '(none)');
+    add('device', 'UA-CH platform', uad.platform || '(empty)');
+    add('device', 'UA-CH mobile', yn(!!uad.mobile));
+    if (uad.getHighEntropyValues) {
+      add('device', 'UA-CH model', 'testing…');
+      add('device', 'UA-CH platform version', 'testing…');
+      add('device', 'UA-CH full versions', 'testing…');
+      add('device', 'UA-CH architecture', 'testing…');
+      add('device', 'UA-CH form factors', 'testing…');
+      startPending();
+      try {
+        uad.getHighEntropyValues(['model', 'platformVersion', 'fullVersionList', 'architecture', 'bitness', 'formFactors'])
+          .then(function (h) {
+            var full = [];
+            for (var fi = 0; fi < (h.fullVersionList || []).length; fi++) {
+              full.push(h.fullVersionList[fi].brand + ' ' + h.fullVersionList[fi].version);
+            }
+            setRow('device', 't-device', 'UA-CH model', h.model || '(empty)', '');
+            setRow('device', 't-device', 'UA-CH platform version', h.platformVersion || '(empty)', '');
+            setRow('device', 't-device', 'UA-CH full versions', full.join(', ') || '(empty)', '');
+            setRow('device', 't-device', 'UA-CH architecture',
+              (h.architecture || '?') + (h.bitness ? ' ' + h.bitness + '-bit' : ''), '');
+            setRow('device', 't-device', 'UA-CH form factors', (h.formFactors || []).join(', ') || '(not reported)', '');
+          })
+          ['catch'](function (e) {
+            setRow('device', 't-device', 'UA-CH model', 'refused: ' + e, 'warn');
+          })
+          .then(donePending, donePending);
+      } catch (eh) {
+        setRow('device', 't-device', 'UA-CH model', 'threw: ' + eh, 'warn');
+        donePending();
+      }
+    }
+  } else {
+    add('device', 'UA-CH (userAgentData)', 'not available (normal outside Chromium)');
+  }
   render('t-device', 'device');
 
   /* ---------- Storage ---------- */
@@ -260,6 +338,23 @@ advance whether a TV is worth trying.</p>
   add('storage', 'IndexedDB present', yn(has(window, 'indexedDB')), verdict(has(window, 'indexedDB')));
   render('t-storage', 'storage');
 
+  /*
+   * Fallback for browsers that restore sessionStorage after a restart (Chrome's
+   * "Continue where you left off", for one), which hides the restart from the
+   * automatic check. The person tells us they restarted; the localStorage mark
+   * from before this load then answers the question directly.
+   */
+  document.getElementById('b-restarted').onclick = function () {
+    if (!lsWorks) return;
+    if (hadLsMark) {
+      outcomes.storageSurvives = 'yes';
+      setRow('storage', 't-storage', 'Survived a restart', 'yes — confirmed after you restarted the browser', 'ok');
+    } else {
+      outcomes.storageSurvives = 'no';
+      setRow('storage', 't-storage', 'Survived a restart', 'NO — storage was empty after you restarted the browser', 'no');
+    }
+  };
+
   /* ---------- URL fragment ---------- */
   var hash = hashAtLoad;
   var fragSurvived = hash.indexOf(FRAG_FLAG + '=') !== -1;
@@ -323,13 +418,15 @@ advance whether a TV is worth trying.</p>
    * That is what we test here. Plan §5.1.
    */
   if (hasSubtle) {
+    startPending();
+    startPending();
     try {
       c.subtle.digest('SHA-256', new Uint8Array([1, 2, 3])).then(function () {
         setCryptoRow('subtle.digest SHA-256', 'yes', 'ok');
       })['catch'](function (e) {
         setCryptoRow('subtle.digest SHA-256', 'failed: ' + e, 'warn');
-      });
-    } catch (e4) { setCryptoRow('subtle.digest SHA-256', 'threw: ' + e4, 'warn'); }
+      }).then(donePending, donePending);
+    } catch (e4) { setCryptoRow('subtle.digest SHA-256', 'threw: ' + e4, 'warn'); donePending(); }
 
     try {
       var keyBytes = new Uint8Array(32);
@@ -346,9 +443,11 @@ advance whether a TV is worth trying.</p>
         })
         ['catch'](function (e) {
           setCryptoRow('subtle AES-GCM (Trystero needs this)', 'FAILED: ' + e, 'no');
-        });
+        })
+        .then(donePending, donePending);
     } catch (e5) {
       setCryptoRow('subtle AES-GCM (Trystero needs this)', 'threw: ' + e5, 'no');
+      donePending();
     }
   } else {
     setCryptoRow('subtle.digest SHA-256', 'crypto.subtle missing', 'warn');
@@ -514,6 +613,7 @@ advance whether a TV is worth trying.</p>
   var EXCLUDED_FROM_SHAPE = {
     'device|Page URL': 1,
     'device|Checked at': 1,
+    'device|Page version': 1,
     'storage|First visit recorded': 1,
     'storage|Visits counted': 1,
     'storage|Survived a restart': 1,
@@ -638,6 +738,22 @@ advance whether a TV is worth trying.</p>
       setSendStatus('Sending is not set up yet (REPORT_ENDPOINT is empty). Use Build report instead.', 'no');
       return;
     }
+    sending = true;
+    sendBtn.disabled = true;
+    /* Give async probes up to 3 s to finish, so the report never says "testing…". */
+    var waited = 0;
+    (function waitForProbes() {
+      if (pending > 0 && waited < 3000) {
+        setSendStatus('Finishing tests…');
+        waited += 250;
+        setTimeout(waitForProbes, 250);
+        return;
+      }
+      doSend();
+    })();
+  };
+
+  function doSend() {
     var report = buildReport();
     document.getElementById('report').value = report;
     var body = JSON.stringify({
@@ -649,8 +765,6 @@ advance whether a TV is worth trying.</p>
       keys: distinctKeys()
     });
 
-    sending = true;
-    sendBtn.disabled = true;
     setSendStatus('Sending…');
 
     var xhr;
