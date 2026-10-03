@@ -10,12 +10,18 @@
  * No server of our own, free at our volume. Plan §12.
  *
  * THE SHEET
- *   A tab named "checks" with two columns: `hash` and `report`.
- *   `hash` is SHA-256 of the report's *shape* — the report minus the lines that
- *   change on every run (timestamps, visit counts, page URL, window size), with
- *   key presses reduced to the distinct set. The page builds the shape; see
- *   VOLATILE in check/index.html. A report whose shape is already in the sheet
- *   is not stored again; the page is told which row already holds it.
+ *   A tab named "checks", one row per *device type* (browser + TV model):
+ *     hash      SHA-256 of the report's shape — the report minus anything that
+ *               changes per run or needs someone to act (see EXCLUDED_FROM_SHAPE
+ *               in check/index.html). Same browser on same model = same hash.
+ *     report    the first full report received for that hash.
+ *     storage survives, fragment survives, fullscreen, wake lock
+ *               results that need a person to act (restart, press a button).
+ *               Filled in as runs report them: blank = never tested; a value
+ *               that disagrees with an earlier one becomes "mixed".
+ *     keys      every distinct remote button seen across all runs.
+ *   A report whose hash is already present updates that row instead of adding
+ *   one, and the page is told what changed.
  *
  * SETUP (one-off, about 5 minutes, in the owner's Google account)
  *   1. Create a Google Sheet (sheets.new). Name it e.g. "PortalCast reports".
@@ -44,7 +50,17 @@
  */
 
 const SHEET_NAME = 'checks';
-const HEADERS = ['hash', 'report'];
+const OUTCOMES = [
+  // [payload key, column header]
+  ['storageSurvives', 'storage survives'],
+  ['fragmentSurvives', 'fragment survives'],
+  ['fullscreen', 'fullscreen'],
+  ['wakeLock', 'wake lock'],
+];
+const OUTCOME_VALUES = ['', 'yes', 'no', 'granted', 'refused', 'unsupported'];
+const HEADERS = ['hash', 'report'].concat(OUTCOMES.map(function (o) { return o[1]; }), ['keys']);
+const KEYS_COL = HEADERS.length;   // last column
+const MAX_KEYS = 200;
 const MAX_REQUEST_CHARS = 100000;
 const MAX_CELL_CHARS = 45000;      // Sheets' hard limit is 50,000 per cell
 const ALLOWED_KINDS = ['check'];   // add 'device-report' when the live app sends them (plan §12.3)
@@ -72,10 +88,31 @@ function doPost(e) {
     lock.waitLock(10000);
     try {
       const sheet = getSheet();
+      const outcomes = data.outcomes || {};
+      const keys = data.keys || [];
       const existing = findHash(sheet, hash);
-      if (existing) return reply({ ok: true, duplicate: true, row: existing });
-      sheet.appendRow([hash, cell(data.report)]);
-      return reply({ ok: true, duplicate: false, row: sheet.getLastRow() });
+
+      if (!existing) {
+        sheet.appendRow([hash, cell(data.report)]
+          .concat(OUTCOMES.map(function (o) { return outcomes[o[0]] || ''; }))
+          .concat([cell(mergeKeys('', keys))]));
+        return reply({ ok: true, duplicate: false, row: sheet.getLastRow() });
+      }
+
+      // Same device type: fill in what this run learned, report what changed.
+      const range = sheet.getRange(existing, 1, 1, HEADERS.length);
+      const row = range.getValues()[0];
+      const updated = [];
+      OUTCOMES.forEach(function (o, i) {
+        const col = 2 + i;   // 0-based index into row
+        const merged = mergeOutcome(String(row[col] || ''), outcomes[o[0]] || '');
+        if (merged !== String(row[col] || '')) { row[col] = merged; updated.push(o[1]); }
+      });
+      const keysBefore = String(row[KEYS_COL - 1] || '');
+      const keysAfter = cell(mergeKeys(keysBefore, keys));
+      if (keysAfter !== keysBefore) { row[KEYS_COL - 1] = keysAfter; updated.push('keys'); }
+      if (updated.length) range.setValues([row]);
+      return reply({ ok: true, duplicate: true, row: existing, updated: updated });
     } finally {
       lock.releaseLock();
     }
@@ -95,6 +132,19 @@ function validate(d) {
   if (ALLOWED_KINDS.indexOf(d.kind) === -1) return 'unknown kind';
   if (typeof d.report !== 'string' || !d.report) return 'missing report';
   if (typeof d.shape !== 'string' || !d.shape) return 'missing shape';
+  if (d.outcomes !== undefined) {
+    if (typeof d.outcomes !== 'object' || d.outcomes === null || Array.isArray(d.outcomes)) return 'bad outcomes';
+    for (let i = 0; i < OUTCOMES.length; i++) {
+      const v = d.outcomes[OUTCOMES[i][0]];
+      if (v !== undefined && OUTCOME_VALUES.indexOf(v) === -1) return 'bad outcome value';
+    }
+  }
+  if (d.keys !== undefined) {
+    if (!Array.isArray(d.keys) || d.keys.length > MAX_KEYS) return 'bad keys';
+    for (let j = 0; j < d.keys.length; j++) {
+      if (typeof d.keys[j] !== 'string' || d.keys[j].length > 200) return 'bad keys';
+    }
+  }
   return '';
 }
 
@@ -107,6 +157,25 @@ function findHash(sheet, hash) {
     if (hashes[i][0] === hash) return i + 2;
   }
   return 0;
+}
+
+/**
+ * Blank never overwrites a known result; the first result fills a blank; a
+ * later result that disagrees means this device type behaves inconsistently.
+ */
+function mergeOutcome(old, incoming) {
+  if (!incoming) return old;
+  if (!old) return incoming;
+  if (old === incoming || old === 'mixed') return old;
+  return 'mixed';
+}
+
+/** Union of newline-separated key lines, sorted. */
+function mergeKeys(oldText, incoming) {
+  const set = {};
+  String(oldText || '').split('\n').forEach(function (k) { if (k) set[k.replace(/^'/, '')] = 1; });
+  incoming.forEach(function (k) { if (k) set[k] = 1; });
+  return Object.keys(set).sort().slice(0, MAX_KEYS).join('\n');
 }
 
 function sha256Hex(text) {
@@ -132,6 +201,11 @@ function getSheet() {
   if (sheet.getLastRow() === 0) {
     sheet.appendRow(HEADERS);
     sheet.setFrozenRows(1);
+  } else {
+    // Keep the header current when columns are added (older rows simply have
+    // blanks in the new columns).
+    const header = sheet.getRange(1, 1, 1, HEADERS.length);
+    if (header.getValues()[0].join('|') !== HEADERS.join('|')) header.setValues([HEADERS]);
   }
   return sheet;
 }

@@ -127,6 +127,17 @@ advance whether a TV is worth trying.</p>
   var LS_FIRST = 'pc_check_first_seen';
   var LS_LOADS = 'pc_check_load_count';
   var FRAG_FLAG = 'frag-test';
+  var SEEN_FLAG = 'seen';                 /* URL marker: this page was open here before */
+  var SS_SESSION = 'pc_check_session';    /* sessionStorage: dies when the browser closes */
+  var SS_FRAG_PENDING = 'pc_check_frag_pending';
+
+  /*
+   * Results that only exist after someone acts (restart the browser, press a
+   * button). They are left out of the de-duplication hash and sent separately,
+   * so the sheet can fill them in on the row this device type already has.
+   * Plan §12.1. Values: '' = not tested yet.
+   */
+  var outcomes = { storageSurvives: '', fragmentSurvives: '', fullscreen: '', wakeLock: '' };
 
   /*
    * Where Send report posts to: the /exec URL of the Google Apps Script in
@@ -185,10 +196,33 @@ advance whether a TV is worth trying.</p>
   } catch (e) { lsErr = e && e.name ? e.name : 'error'; }
   add('storage', 'localStorage works', yn(lsWorks) + (lsErr ? ' (' + lsErr + ')' : ''), verdict(lsWorks));
 
-  var first = null, loads = 0;
+  /*
+   * Did localStorage survive the browser being closed and reopened? The page
+   * works this out by itself — no identity needed:
+   *   sessionStorage dies whenever the browser closes; localStorage should not.
+   *   localStorage mark present, session mark missing → reopened, survived.
+   *   localStorage mark present, session mark present → same session, untested.
+   *   localStorage mark missing, but our URL marker came back (the browser
+   *     reopened this page) and the session mark is gone → storage was wiped.
+   *   Nothing at all → first visit; cannot tell yet.
+   * Caveat: closing only the tab also clears sessionStorage on most browsers,
+   * so "survived" strictly means "survived closing the page". On TVs that is
+   * usually closing the browser.
+   */
+  var hashAtLoad = location.hash || '';
+  var urlMarker = hashAtLoad.indexOf(SEEN_FLAG + '=') !== -1 || hashAtLoad.indexOf(FRAG_FLAG + '=') !== -1;
+  var ssAvailable = false, hadSession = false;
+  try {
+    hadSession = sessionStorage.getItem(SS_SESSION) === '1';
+    sessionStorage.setItem(SS_SESSION, '1');
+    ssAvailable = sessionStorage.getItem(SS_SESSION) === '1';
+  } catch (e2a) { /* no sessionStorage */ }
+
+  var first = null, loads = 0, hadLsMark = false;
   if (lsWorks) {
     try {
       first = localStorage.getItem(LS_FIRST);
+      hadLsMark = !!first;
       loads = parseInt(localStorage.getItem(LS_LOADS) || '0', 10) || 0;
       loads = loads + 1;
       if (!first) { first = new Date().toISOString(); localStorage.setItem(LS_FIRST, first); }
@@ -198,11 +232,26 @@ advance whether a TV is worth trying.</p>
   add('storage', 'First visit recorded', first || '(none)');
   add('storage', 'Visits counted', loads);
   if (!lsWorks) {
-    add('storage', 'Survived a restart', 'cannot tell — localStorage unavailable', 'no');
-  } else if (loads > 1) {
-    add('storage', 'Survived a restart', 'yes if you fully closed the browser between visits', 'ok');
+    outcomes.storageSurvives = 'no';
+    add('storage', 'Survived a restart', 'no — localStorage unavailable', 'no');
+  } else if (!ssAvailable) {
+    add('storage', 'Survived a restart', 'cannot tell — sessionStorage unavailable', 'warn');
+  } else if (hadLsMark && !hadSession) {
+    outcomes.storageSurvives = 'yes';
+    add('storage', 'Survived a restart', 'yes — the browser was reopened and storage was still there', 'ok');
+  } else if (hadLsMark) {
+    add('storage', 'Survived a restart', 'not tested yet — close the browser fully and return', 'warn');
+  } else if (urlMarker && !hadSession) {
+    outcomes.storageSurvives = 'no';
+    add('storage', 'Survived a restart', 'NO — the browser reopened this page but storage was wiped', 'no');
   } else {
-    add('storage', 'Survived a restart', 'unknown — close the browser fully and return', 'warn');
+    add('storage', 'Survived a restart', 'not tested yet — first visit; close the browser fully and return', 'warn');
+  }
+
+  /* Leave a marker in our own URL, so a browser that reopens this page after a
+     restart tells us we were here even if storage was wiped. Never sent anywhere. */
+  if (!urlMarker && history.replaceState) {
+    try { history.replaceState(null, '', location.pathname + '#' + SEEN_FLAG + '=' + Date.now()); } catch (e2b) {}
   }
 
   var ssWorks = false;
@@ -212,18 +261,26 @@ advance whether a TV is worth trying.</p>
   render('t-storage', 'storage');
 
   /* ---------- URL fragment ---------- */
-  var hash = location.hash || '';
-  var fragSurvived = hash.indexOf(FRAG_FLAG) !== -1;
+  var hash = hashAtLoad;
+  var fragSurvived = hash.indexOf(FRAG_FLAG + '=') !== -1;
+  /* Set just before the test reloads, so a lost fragment reads as "no", not "untested". */
+  var fragPending = false;
+  try { fragPending = sessionStorage.getItem(SS_FRAG_PENDING) === '1'; sessionStorage.removeItem(SS_FRAG_PENDING); } catch (e3a) {}
   add('fragment', 'Current fragment', hash || '(empty)');
   add('fragment', 'history.replaceState', yn(has(history, 'replaceState')), verdict(has(history, 'replaceState')));
   if (fragSurvived) {
+    outcomes.fragmentSurvives = 'yes';
     add('fragment', 'Fragment survived a reload', 'yes', 'ok');
+  } else if (fragPending) {
+    outcomes.fragmentSurvives = 'no';
+    add('fragment', 'Fragment survived a reload', 'NO — the fragment was lost on reload', 'no');
   } else {
     add('fragment', 'Fragment survived a reload', 'not tested — press the button below', 'warn');
   }
   render('t-fragment', 'fragment');
 
   document.getElementById('b-frag').onclick = function () {
+    try { sessionStorage.setItem(SS_FRAG_PENDING, '1'); } catch (e) {}
     try {
       if (history.replaceState) {
         history.replaceState(null, '', location.pathname + '#' + FRAG_FLAG + '=' + Date.now());
@@ -389,27 +446,32 @@ advance whether a TV is worth trying.</p>
 
   document.getElementById('b-fs').onclick = function () {
     var fn = de.requestFullscreen || de.webkitRequestFullscreen || de.msRequestFullscreen;
-    if (!fn) { setScreenRow('Fullscreen attempt', 'no API', 'no'); return; }
+    if (!fn) { outcomes.fullscreen = 'unsupported'; setScreenRow('Fullscreen attempt', 'no API', 'no'); return; }
     try {
       var p = fn.call(de);
       if (p && p.then) {
-        p.then(function () { setScreenRow('Fullscreen attempt', 'granted', 'ok'); })
-         ['catch'](function (e) { setScreenRow('Fullscreen attempt', 'refused: ' + e, 'no'); });
+        p.then(function () { outcomes.fullscreen = 'granted'; setScreenRow('Fullscreen attempt', 'granted', 'ok'); })
+         ['catch'](function (e) { outcomes.fullscreen = 'refused'; setScreenRow('Fullscreen attempt', 'refused: ' + e, 'no'); });
       } else {
-        setScreenRow('Fullscreen attempt', 'called (no promise returned)', 'warn');
+        /* Older API with no promise: judge by whether we actually went fullscreen. */
+        setTimeout(function () {
+          var on = !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+          outcomes.fullscreen = on ? 'granted' : 'refused';
+          setScreenRow('Fullscreen attempt', on ? 'granted (no promise returned)' : 'called, but did not go fullscreen', on ? 'ok' : 'no');
+        }, 500);
       }
-    } catch (e) { setScreenRow('Fullscreen attempt', 'threw: ' + e, 'no'); }
+    } catch (e) { outcomes.fullscreen = 'refused'; setScreenRow('Fullscreen attempt', 'threw: ' + e, 'no'); }
   };
 
   document.getElementById('b-wake').onclick = function () {
     if (!(navigator.wakeLock && navigator.wakeLock.request)) {
-      setScreenRow('Wake lock attempt', 'no API', 'no'); return;
+      outcomes.wakeLock = 'unsupported'; setScreenRow('Wake lock attempt', 'no API', 'no'); return;
     }
     try {
       navigator.wakeLock.request('screen').then(function () {
-        setScreenRow('Wake lock attempt', 'granted', 'ok');
-      })['catch'](function (e) { setScreenRow('Wake lock attempt', 'refused: ' + e, 'no'); });
-    } catch (e) { setScreenRow('Wake lock attempt', 'threw: ' + e, 'no'); }
+        outcomes.wakeLock = 'granted'; setScreenRow('Wake lock attempt', 'granted', 'ok');
+      })['catch'](function (e) { outcomes.wakeLock = 'refused'; setScreenRow('Wake lock attempt', 'refused: ' + e, 'no'); });
+    } catch (e) { outcomes.wakeLock = 'refused'; setScreenRow('Wake lock attempt', 'threw: ' + e, 'no'); }
   };
 
   /* ---------- Remote buttons ---------- */
@@ -441,18 +503,26 @@ advance whether a TV is worth trying.</p>
   var ORDER = ['device', 'storage', 'fragment', 'crypto', 'rtc', 'codecs', 'features', 'screen'];
 
   /*
-   * Rows that differ on every run of the same device, so they are left out of
-   * the "shape" the report sheet de-duplicates on. Everything else — including
-   * the results of the fragment, restart and fullscreen tests — is part of it,
-   * so a run that learns something new is stored as a new row.
+   * Rows left out of the "shape" the report sheet de-duplicates on, so the
+   * same browser on the same TV model always lands on the same row:
+   *  - rows that differ on every run (timestamps, counters, URL, window size);
+   *  - results that only exist after someone acts — these travel separately as
+   *    `outcomes` and fill in columns on that row (plan §12.1);
+   *  - the Fullscreen API row, grouped with the fullscreen result by choice.
+   * Remote buttons are left out entirely and sent as `keys`.
    */
-  var VOLATILE = {
+  var EXCLUDED_FROM_SHAPE = {
     'device|Page URL': 1,
     'device|Checked at': 1,
     'storage|First visit recorded': 1,
     'storage|Visits counted': 1,
+    'storage|Survived a restart': 1,
     'fragment|Current fragment': 1,
-    'screen|Window size': 1
+    'fragment|Fragment survived a reload': 1,
+    'screen|Window size': 1,
+    'screen|Fullscreen API': 1,
+    'screen|Fullscreen attempt': 1,
+    'screen|Wake lock attempt': 1
   };
 
   function keyLine(k) {
@@ -461,9 +531,8 @@ advance whether a TV is worth trying.</p>
 
   /*
    * forShape = false: the full report, as shown and stored.
-   * forShape = true:  the same report minus VOLATILE rows, with key presses
-   * reduced to the distinct set in sorted order — which buttons the remote
-   * has, not how often or in what order they were pressed.
+   * forShape = true:  the same report minus EXCLUDED_FROM_SHAPE rows and
+   * without the remote-button log.
    */
   function buildReport(forShape) {
     var out = 'PortalCast /check report\n';
@@ -473,29 +542,29 @@ advance whether a TV is worth trying.</p>
       var rows = results[name] || [];
       out += '[' + name.toUpperCase() + ']\n';
       for (var i = 0; i < rows.length; i++) {
-        if (forShape && VOLATILE[name + '|' + rows[i][0]]) continue;
+        if (forShape && EXCLUDED_FROM_SHAPE[name + '|' + rows[i][0]]) continue;
         out += '  ' + rows[i][0] + ': ' + rows[i][1] + '\n';
       }
       out += '\n';
     }
-    var lines = [];
-    var seen = {};
-    for (var k = 0; k < keyLog.length; k++) {
-      var line = keyLine(keyLog[k]);
-      if (forShape) {
-        if (seen[line]) continue;
-        seen[line] = 1;
-      }
-      lines.push(line);
-    }
-    if (forShape) lines.sort();
-    out += '[REMOTE BUTTONS] (' + (forShape ? lines.length + ' distinct' : keyLog.length + ' presses') + ')\n';
-    if (!lines.length) {
+    if (forShape) return out;
+    out += '[REMOTE BUTTONS] (' + keyLog.length + ' presses)\n';
+    if (!keyLog.length) {
       out += '  none recorded - press some remote buttons and rebuild\n';
     } else {
-      for (var n = 0; n < lines.length; n++) out += '  ' + lines[n] + '\n';
+      for (var k = 0; k < keyLog.length; k++) out += '  ' + keyLine(keyLog[k]) + '\n';
     }
     return out;
+  }
+
+  /* The distinct buttons pressed, sorted — merged into the row's key map. */
+  function distinctKeys() {
+    var seen = {}, out = [];
+    for (var k = 0; k < keyLog.length; k++) {
+      var line = keyLine(keyLog[k]);
+      if (!seen[line]) { seen[line] = 1; out.push(line); }
+    }
+    return out.sort();
   }
 
   document.getElementById('b-report').onclick = function () {
@@ -575,7 +644,9 @@ advance whether a TV is worth trying.</p>
       v: REPORT_VERSION,
       kind: 'check',
       report: report,
-      shape: buildReport(true)
+      shape: buildReport(true),
+      outcomes: outcomes,
+      keys: distinctKeys()
     });
 
     sending = true;
@@ -602,7 +673,9 @@ advance whether a TV is worth trying.</p>
         try { res = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
         if (res && res.ok && res.duplicate) {
           settled = true;
-          finishSend('Already recorded — this exact result is row ' + res.row + ' of the sheet. Nothing new to add.', 'ok');
+          finishSend(res.updated && res.updated.length
+            ? 'This device type is row ' + res.row + ' — updated: ' + res.updated.join(', ') + '.'
+            : 'Already recorded as row ' + res.row + ' — nothing new to add.', 'ok');
         } else if (res && res.ok) {
           settled = true;
           finishSend('Sent — thank you. (Row ' + res.row + ')', 'ok');
