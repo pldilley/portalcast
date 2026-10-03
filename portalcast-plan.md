@@ -747,7 +747,7 @@ Tiny, mobile-first, and **it never joins a room on its own** — if it did, a ph
 
 ## 12. Device reports and telemetry
 
-We own two TVs plus the Tizen and webOS emulators. Real users will run PortalCast on devices we will never touch, and their Portals already know exactly what we need: receive codecs, storage persistence, fragment survival, which remote keys arrive, and whether pairing and playback actually worked.
+We own two TVs plus the Tizen and webOS emulators. Real users will run PortalCast on devices we will never touch, and their Portals already know exactly what we need: receive codecs, storage persistence, fragment survival, and whether pairing and playback actually worked.
 
 ### 12.1 The collector: a Google Sheet, not a server
 
@@ -780,6 +780,7 @@ Sending uses a plain `XMLHttpRequest` with a `text/plain` body (a "simple" reque
 **A live report is not a `/check` report.** Several `/check` results exist only because a person deliberately does something — write a fragment and reload, fully restart the browser, press fullscreen. The live app cannot ask for any of that, so its report has two parts:
 - **Capabilities, probed silently at connect** — codecs, crypto, features, user agent. Stable for a given TV and browser version, so this is the part to hash for de-duplication.
 - **Outcomes, observed during real use** — whether a stored pairing was still there on the next load (storage survival), whether the Portal was opened from a `/tv#…` bookmark (fragment survival), whether "Press OK to start" got fullscreen (§11.2). These arrive over time, not at once, and are reported as they are first seen. They are excluded from the hash, or a TV would re-report every time an outcome arrived.
+- **Not remote-control keys.** `/check` collects the key map because someone deliberately presses every button once. In real use, every press would be new information arriving forever, so the same row would be updated over and over. Live reports leave keys out entirely; revisit only if Portal playback controls (§11.2) ever need field data.
 
 ### 12.4 Hard constraints on every payload, whatever the sender
 
