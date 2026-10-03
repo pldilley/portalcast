@@ -36,11 +36,6 @@
   button:focus{outline:3px solid var(--warn); outline-offset:2px}
   #keylog{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:14px; max-height:220px; overflow:auto}
   #keylog div{padding:2px 0; border-bottom:1px solid var(--line)}
-  input[type=text]{
-    font:inherit; width:100%; max-width:420px; background:#0a0c0f; color:var(--fg);
-    border:1px solid var(--line); border-radius:6px; padding:10px; margin:0 0 10px;
-  }
-  input[type=text]:focus{outline:3px solid var(--warn); outline-offset:2px}
   #send-status{margin:4px 0 16px; min-height:1.5em}
   textarea{
     width:100%; min-height:220px; background:#0a0c0f; color:var(--fg);
@@ -115,9 +110,8 @@ advance whether a TV is worth trying.</p>
   <strong>Send to the developer</strong>
   <p class="sub" style="margin:4px 0 10px">Sends this page's results &mdash; device capabilities and the
   remote-button log, exactly what <em>Build report</em> shows &mdash; to a private Google Sheet.
-  No file names, no pairing codes, no identifiers. Only sent when you press the button.</p>
-  <label for="label" class="sub">Optional: name this device, e.g. "Living room Samsung"</label><br>
-  <input type="text" id="label" maxlength="100" autocomplete="off">
+  No file names, no pairing codes, no identifiers. Only sent when you press the button, and a
+  result that has been sent before is not stored twice.</p>
   <div><button id="b-send" class="big">Send report</button></div>
   <div id="send-status" class="sub"></div>
 </div>
@@ -445,7 +439,33 @@ advance whether a TV is worth trying.</p>
 
   /* ---------- Report ---------- */
   var ORDER = ['device', 'storage', 'fragment', 'crypto', 'rtc', 'codecs', 'features', 'screen'];
-  function buildReport() {
+
+  /*
+   * Rows that differ on every run of the same device, so they are left out of
+   * the "shape" the report sheet de-duplicates on. Everything else — including
+   * the results of the fragment, restart and fullscreen tests — is part of it,
+   * so a run that learns something new is stored as a new row.
+   */
+  var VOLATILE = {
+    'device|Page URL': 1,
+    'device|Checked at': 1,
+    'storage|First visit recorded': 1,
+    'storage|Visits counted': 1,
+    'fragment|Current fragment': 1,
+    'screen|Window size': 1
+  };
+
+  function keyLine(k) {
+    return 'key="' + k.key + '" code="' + k.code + '" keyCode=' + k.keyCode;
+  }
+
+  /*
+   * forShape = false: the full report, as shown and stored.
+   * forShape = true:  the same report minus VOLATILE rows, with key presses
+   * reduced to the distinct set in sorted order — which buttons the remote
+   * has, not how often or in what order they were pressed.
+   */
+  function buildReport(forShape) {
     var out = 'PortalCast /check report\n';
     out += '========================\n\n';
     for (var s = 0; s < ORDER.length; s++) {
@@ -453,17 +473,27 @@ advance whether a TV is worth trying.</p>
       var rows = results[name] || [];
       out += '[' + name.toUpperCase() + ']\n';
       for (var i = 0; i < rows.length; i++) {
+        if (forShape && VOLATILE[name + '|' + rows[i][0]]) continue;
         out += '  ' + rows[i][0] + ': ' + rows[i][1] + '\n';
       }
       out += '\n';
     }
-    out += '[REMOTE BUTTONS] (' + keyLog.length + ' presses)\n';
-    if (!keyLog.length) {
+    var lines = [];
+    var seen = {};
+    for (var k = 0; k < keyLog.length; k++) {
+      var line = keyLine(keyLog[k]);
+      if (forShape) {
+        if (seen[line]) continue;
+        seen[line] = 1;
+      }
+      lines.push(line);
+    }
+    if (forShape) lines.sort();
+    out += '[REMOTE BUTTONS] (' + (forShape ? lines.length + ' distinct' : keyLog.length + ' presses') + ')\n';
+    if (!lines.length) {
       out += '  none recorded - press some remote buttons and rebuild\n';
     } else {
-      for (var k = 0; k < keyLog.length; k++) {
-        out += '  key="' + keyLog[k].key + '" code="' + keyLog[k].code + '" keyCode=' + keyLog[k].keyCode + '\n';
-      }
+      for (var n = 0; n < lines.length; n++) out += '  ' + lines[n] + '\n';
     }
     return out;
   }
@@ -487,31 +517,6 @@ advance whether a TV is worth trying.</p>
   };
 
   /* ---------- Send report (plan §12) ---------- */
-  /* First value in a section whose label starts with the given text. */
-  function val(section, labelStart) {
-    var rows = results[section] || [];
-    for (var i = 0; i < rows.length; i++) {
-      if (rows[i][0].indexOf(labelStart) === 0) return rows[i][1];
-    }
-    return '';
-  }
-
-  /* The columns the Sheet shows at a glance; the full report rides along too. */
-  function buildSummary() {
-    return {
-      userAgent: navigator.userAgent,
-      localStorage: val('storage', 'localStorage works'),
-      survivedRestart: val('storage', 'Survived a restart'),
-      visits: val('storage', 'Visits counted'),
-      fragmentSurvived: val('fragment', 'Fragment survived a reload'),
-      getRandomValues: val('crypto', 'crypto.getRandomValues'),
-      aesGcm: val('crypto', 'subtle AES-GCM'),
-      videoCodecs: val('rtc', 'Video codecs it can receive'),
-      audioCodecs: val('rtc', 'Audio codecs it can receive'),
-      keyPresses: String(keyLog.length)
-    };
-  }
-
   var sendBtn = document.getElementById('b-send');
   var sendStatus = document.getElementById('send-status');
   var sending = false;
@@ -555,7 +560,7 @@ advance whether a TV is worth trying.</p>
     document.body.appendChild(form);
     form.submit();
     document.body.removeChild(form);
-    finishSend('Sent, but this browser could not confirm it arrived. Please mention the device name so it can be checked.', 'warn');
+    finishSend('Sent, but this browser could not confirm it arrived. Check the sheet for a new row.', 'warn');
   }
 
   sendBtn.onclick = function () {
@@ -569,9 +574,8 @@ advance whether a TV is worth trying.</p>
     var body = JSON.stringify({
       v: REPORT_VERSION,
       kind: 'check',
-      label: document.getElementById('label').value.replace(/^\s+|\s+$/g, '').slice(0, 100),
-      summary: buildSummary(),
-      report: report
+      report: report,
+      shape: buildReport(true)
     });
 
     sending = true;
@@ -596,7 +600,10 @@ advance whether a TV is worth trying.</p>
         if (settled) return;
         var res = null;
         try { res = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
-        if (res && res.ok) {
+        if (res && res.ok && res.duplicate) {
+          settled = true;
+          finishSend('Already recorded — this exact result is row ' + res.row + ' of the sheet. Nothing new to add.', 'ok');
+        } else if (res && res.ok) {
           settled = true;
           finishSend('Sent — thank you. (Row ' + res.row + ')', 'ok');
         } else if (res && res.error) {

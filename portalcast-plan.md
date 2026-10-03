@@ -756,11 +756,12 @@ Reports are POSTed to a **Google Apps Script web app** (`scripts/telemetry/Code.
 - **It stays inside the "no backend of our own" goal (§1)** in the sense that matters — there is no server we run — but it *is* an endpoint we own, so it is covered by the rules below and by a privacy page before the live app uses it.
 - **The script never sees the sender's IP address** — Apps Script does not expose it — so it cannot be stored even by accident. Google's own infrastructure does see it, as with any web request (§5.2).
 - **The URL is public**, so anyone can post to it. The script accepts only known report kinds, caps every cell, and neutralises spreadsheet formula injection. Spam is a nuisance, not a leak: the Sheet holds nothing secret.
+- **Two columns: `hash` and `report`.** The page sends the full report plus its *shape* — the same text without the lines that change on every run (timestamps, visit counts, page URL, window size), and with key presses reduced to the distinct, sorted set. The script stores SHA-256 of the shape beside the full report, and **a shape already in the sheet is not stored again**; the page is told which row holds it. A run that learns something new — a fragment test passed, a restart survived, fullscreen granted — has a different shape and becomes a new row. The volatile-row list lives in `check/index.html` (`VOLATILE`).
 - The script and the pages share a `v` field so old rows stay interpretable.
 
 ### 12.2 `/check`: a button, which is the consent
 
-`/check` (§13 milestone 1b) has a **Send report** button that posts its results directly — TV browsers often cannot copy to a clipboard that reaches anyone. Pressing the button is the consent; nothing is sent otherwise. An optional free-text label names the device. These are the owner's and friends' own test runs, de-duplicated by hand, so no automatic de-duplication is needed here.
+`/check` (§13 milestone 1b) has a **Send report** button that posts its results directly — TV browsers often cannot copy to a clipboard that reaches anyone. Pressing the button is the consent; nothing is sent otherwise. Repeat runs of the same device with the same results are de-duplicated by the sheet (§12.1).
 
 Sending uses a plain `XMLHttpRequest` with a `text/plain` body (a "simple" request, so no CORS preflight, which Apps Script cannot answer). Where that fails, it falls back to posting a hidden form into an iframe, which crosses origins on almost any browser but cannot read the reply — the page then says it could not confirm delivery.
 
