@@ -772,6 +772,10 @@ Sending uses a plain `XMLHttpRequest` with a `text/plain` body (a "simple" reque
 
 **De-duplication — open.** If a TV wipes its storage and is re-paired, it looks like a new device. A device fingerprint would solve that but is exactly the persistent identifier the rules below forbid, and fingerprinting is what privacy-conscious users object to most. **Leading idea:** de-duplicate by *content*, not identity — the Source keeps a hash of each capability payload it has already sent (timestamps excluded) and skips any payload it has sent before. A TV that forgets itself produces the same payload, so it is not re-sent; nothing identifies the TV. Accepted cost: two identical TV models in one household count once, which is fine, because the question is "do 2019 Tizen panels keep `localStorage`", never "how many households own one". Settle this before building 12.3.
 
+**A live report is not a `/check` report.** Several `/check` results exist only because a person deliberately does something — write a fragment and reload, fully restart the browser, press fullscreen. The live app cannot ask for any of that, so its report has two parts:
+- **Capabilities, probed silently at connect** — codecs, crypto, features, user agent. Stable for a given TV and browser version, so this is the part to hash for de-duplication.
+- **Outcomes, observed during real use** — whether a stored pairing was still there on the next load (storage survival), whether the Portal was opened from a `/tv#…` bookmark (fragment survival), whether "Press OK to start" got fullscreen (§11.2). These arrive over time, not at once, and are reported as they are first seen. They are excluded from the hash, or a TV would re-report every time an outcome arrived.
+
 ### 12.4 Hard constraints on every payload, whatever the sender
 
 - Device capabilities and outcomes only. **Never** filenames, library contents, room credentials, profile names or IP addresses.

@@ -1,3 +1,9 @@
+/** @OnlyCurrentDoc */
+/*
+ * The line above limits this script's permission to the one Sheet it is
+ * attached to — it cannot open or change any other file in the account.
+ */
+
 /**
  * PortalCast report collector — a Google Apps Script web app that appends each
  * report it receives as one row of the Google Sheet it is attached to.
@@ -65,7 +71,13 @@ function doPost(e) {
     try {
       const sheet = getSheet();
       sheet.appendRow(row);
-      return reply({ ok: true, row: sheet.getLastRow() });
+      const n = sheet.getLastRow();
+      // The report is ~80 lines, which would make the row huge and push every
+      // other value to the bottom of its cell, out of sight. Keep each row one
+      // line high and top-aligned; click the report cell to read it in full.
+      sheet.getRange(n, 1, 1, HEADERS.length).setVerticalAlignment('top');
+      sheet.setRowHeightsForced(n, 1, 21);
+      return reply({ ok: true, row: n });
     } finally {
       lock.releaseLock();
     }
@@ -109,6 +121,7 @@ function getSheet() {
   if (sheet.getLastRow() === 0) {
     sheet.appendRow(HEADERS);
     sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, HEADERS.length).setFontWeight('bold');
   }
   return sheet;
 }
