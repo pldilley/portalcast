@@ -18,7 +18,7 @@ This document is the starting brief for building the project from scratch. Read 
 - Works with nothing but a modern browser on every device (smart TV browser, Fire TV Silk, sideloaded Android TV browser, laptop Chrome/Firefox/Edge/Safari, phone browser).
 - Nothing is ever typed on the TV. Pairing is a QR code the TV displays and another device reads.
 - Video never goes through our servers. Media and control data travel directly between devices, end-to-end encrypted.
-- Simple codebase: TypeScript, static hosting, no backend of our own for phases 1–3.
+- Simple codebase: TypeScript, static hosting, no backend of our own for phases 1–3. The one exception is an opt-in report collector, which is a Google Apps Script and Sheet rather than a server we run (§12).
 - Phase 3: a friend in another home can watch a file from my laptop on their TV and control it from their own phone.
 
 **Non-goals (for now)**
@@ -170,6 +170,7 @@ Before coding, check the current Trystero README for exact option names (`joinRo
 | Anyone else on the network | Encrypted WebRTC traffic | Contents |
 | A messaging or email provider, if the user forwards a pairing link | The ephemeral pairing credentials | Nothing after pairing completes; those credentials die on first use |
 | A TV manufacturer's bookmark sync, if the TV syncs bookmarks to an account | The permanent room credentials for that pairing | Contents. Worth stating on a privacy page |
+| Google, if a report is sent (§12) | The report's device capabilities; Google's infrastructure sees the sender's IP, as with any request | File names, credentials, video, control messages. The collecting script itself never sees the IP |
 
 ### 5.3 Threat model and how we cover it
 
@@ -509,7 +510,7 @@ All messages are typed in a shared `protocol.ts`. Keep every send targeted — e
 | `range` (request kind) | Portal → Source | request `{ fileId, start, end }` → response ArrayBuffer. Kept for genuine one-off reads, such as probing the `moov` box |
 | `subtitles` | Source → Portal | `{ fileId, vtt: string }` (convert SRT → VTT on the Source) |
 | `ping` / `pong` | Portal → Source, and separately Remote → Source | Liveness, within each two-peer room. Always sent by the foreground device; the Source only answers (§9). A Portal can never ping a Remote — they share no room (§3) |
-| `device-report` | Portal → Source | **Deferred (§12)** — capabilities only, shown to the user before anything leaves the Source |
+| `device-report` | Portal → Source | **Not built yet (§12.3)** — capabilities only. The Source forwards it to the collector only if the user opted in, and only if it has not sent the same payload before |
 
 Every `fileId` arriving at the Source is checked against the active profile's shared list before any bytes are read.
 
@@ -744,30 +745,38 @@ Tiny, mobile-first, and **it never joins a room on its own** — if it did, a ph
 
 ---
 
-## 12. Deferred: device reports from the field
+## 12. Device reports and telemetry
 
-**Status: wanted, shape agreed, not scheduled.** The problem is real — we own two TVs plus the Tizen and webOS emulators, and `/check` (§13 milestone 1b) only ever covers devices we or a friend deliberately point at it. **This is the only plan for data from devices we will never touch**; an earlier idea of asking strangers to run `/check` themselves was dropped as unrealistic. Once there are real users, their Portals already know exactly what we need: receive codecs, storage persistence, fragment survival, which remote keys arrive.
+We own two TVs plus the Tizen and webOS emulators. Real users will run PortalCast on devices we will never touch, and their Portals already know exactly what we need: receive codecs, storage persistence, fragment survival, which remote keys arrive, and whether pairing and playback actually worked.
 
-**It needs no backend, and it must not be silent.**
+### 12.1 The collector: a Google Sheet, not a server
 
-The Portal already holds a data channel to the Source and already sends `capabilities` on every connect (§10). Extend that into a fuller `device-report`, and let the **Source** — the device with a keyboard and a person looking at it — present it:
+Reports are POSTed to a **Google Apps Script web app** (`scripts/telemetry/Code.gs`) that appends each one as a row in a Google Sheet in the owner's account. Free at this volume, nothing to host or patch, and setup is five minutes (instructions at the top of the script).
 
-1. Portal gathers the same facts `/check` probes and sends them to the Source.
-2. The Source shows one line: *"Help improve PortalCast? Send a report about your TV."*
-3. **The exact payload is visible before sending**, not summarised. One click to send, one to decline, and a "don't ask again" that is honoured.
-4. Sending opens a prefilled GitHub issue or an email draft — the user's own channel, so we transmit nothing ourselves.
+- **It stays inside the "no backend of our own" goal (§1)** in the sense that matters — there is no server we run — but it *is* an endpoint we own, so it is covered by the rules below and by a privacy page before the live app uses it.
+- **The script never sees the sender's IP address** — Apps Script does not expose it — so it cannot be stored even by accident. Google's own infrastructure does see it, as with any web request (§5.2).
+- **The URL is public**, so anyone can post to it. The script accepts only known report kinds, caps every cell, and neutralises spreadsheet formula injection. Spam is a nuisance, not a leak: the Sheet holds nothing secret.
+- The script and the pages share a `v` field so old rows stay interpretable.
 
-Why this shape:
-- **No endpoint, so the "no backend of our own" goal (§1) survives.** A collection server is the only version that breaks it, and it buys nothing until there are enough users for aggregates to mean anything.
-- **"Silent" is the one thing to avoid.** The differentiator here is that video and metadata never touch our servers (§5.2). Quietly shipping device data off a TV — even with consent clicked earlier, on a different device — would undercut the exact claim the product is sold on. Visible-and-explicit costs one click and keeps the story intact.
-- Consent belongs on the Source for a second reason beyond the keyboard: a TV is often shared, while the person at the laptop is the one who chose to use this.
+### 12.2 `/check`: a button, which is the consent
 
-**Hard constraints on the payload**, whatever the transport:
-- Device capabilities only. **Never** filenames, library contents, room credentials, profile names or IP addresses.
-- **No identifier that persists across reports** — no device id, no install id. The question is "do 2019 Tizen panels keep `localStorage`", never "what does this household watch".
-- Versioned, so old reports stay interpretable.
+`/check` (§13 milestone 1b) has a **Send report** button that posts its results directly — TV browsers often cannot copy to a clipboard that reaches anyone. Pressing the button is the consent; nothing is sent otherwise. An optional free-text label names the device. These are the owner's and friends' own test runs, de-duplicated by hand, so no automatic de-duplication is needed here.
 
-If aggregate telemetry at scale is ever genuinely wanted, that is a separate decision needing an endpoint, a privacy page and a real opt-in — not an extension of this.
+Sending uses a plain `XMLHttpRequest` with a `text/plain` body (a "simple" request, so no CORS preflight, which Apps Script cannot answer). Where that fails, it falls back to posting a hidden form into an iframe, which crosses origins on almost any browser but cannot read the reply — the page then says it could not confirm delivery.
+
+### 12.3 The live app: relayed through the Source, sent once — **direction agreed, not built**
+
+1. The Portal gathers the same facts `/check` probes and sends them to the Source as `device-report` (§10), over the data channel it already has.
+2. The **Source** sends them to the collector — the Portal never contacts it directly. Two reasons: consent belongs to the person at the laptop, who chose to use this (a TV is often shared); and the Source is the device that *remembers*, so it can stop a TV that keeps forgetting its own storage from reporting again on every visit.
+3. **Consent is a one-time opt-in on the Source**, then automatic — a clear "Share anonymous device reports to help improve PortalCast" toggle, off by default, with the exact payload viewable and the choice reversible. Never silent without that opt-in.
+
+**De-duplication — open.** If a TV wipes its storage and is re-paired, it looks like a new device. A device fingerprint would solve that but is exactly the persistent identifier the rules below forbid, and fingerprinting is what privacy-conscious users object to most. **Leading idea:** de-duplicate by *content*, not identity — the Source keeps a hash of each capability payload it has already sent (timestamps excluded) and skips any payload it has sent before. A TV that forgets itself produces the same payload, so it is not re-sent; nothing identifies the TV. Accepted cost: two identical TV models in one household count once, which is fine, because the question is "do 2019 Tizen panels keep `localStorage`", never "how many households own one". Settle this before building 12.3.
+
+### 12.4 Hard constraints on every payload, whatever the sender
+
+- Device capabilities and outcomes only. **Never** filenames, library contents, room credentials, profile names or IP addresses.
+- **No identifier that persists across reports** — no device id, no install id, no fingerprint.
+- Versioned (`v`), so old reports stay interpretable.
 
 ---
 
@@ -789,7 +798,7 @@ If aggregate telemetry at scale is ever genuinely wanted, that is a separate dec
    | `canPlayType()` against real codec strings | *Mode B only — irrelevant to Mode A, where the TV never sees the file* |
    | Service Worker registration and ranged media | *Mode B only* |
 
-   **Audience: us.** Our own TVs, the Tizen and webOS emulators, and at most a few friends — all of whom can type a long URL. It is a development instrument, not a public page, so it needs no short domain and no marketing copy. Getting field data from real users at scale is a different problem with a different answer: §12.
+   **Audience: us.** Our own TVs, the Tizen and webOS emulators, and at most a few friends — all of whom can type a long URL. It is a development instrument, not a public page, so it needs no short domain and no marketing copy. Results reach us through its **Send report** button (§12.2), because TV browsers often have no usable clipboard. Field data from real users is the live app's job (§12.3).
 2. **Pairing:** QR generation and scanning, ephemeral and permanent credentials, one room per pairing, fragment bookmarking, `unpair` and reset, profiles.
 2b. **Portal UI (§11.2):** persistent top bar with Source selector, the three states, d-pad focus ring and the `key`/`keyCode` input map, wake lock. **No playback controls** — media keys are deferred (§11.2).
 3. **Mode A streaming (native):** pick file, capture, stream, play/pause/seek/volume, status back to Source — **including the full quality-tuning set in §7**, with `getStats()` measurements recorded. Chrome first, then Firefox.

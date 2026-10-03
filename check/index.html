@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PortalCast — Will it work on your TV?</title>
+<title>PortalCast — device check</title>
 <!--
   Deliberately a single self-contained file with an ES5-safe inline script and
   no imports, no modules and no dependencies. This page has to run on the oldest
@@ -36,6 +36,12 @@
   button:focus{outline:3px solid var(--warn); outline-offset:2px}
   #keylog{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:14px; max-height:220px; overflow:auto}
   #keylog div{padding:2px 0; border-bottom:1px solid var(--line)}
+  input[type=text]{
+    font:inherit; width:100%; max-width:420px; background:#0a0c0f; color:var(--fg);
+    border:1px solid var(--line); border-radius:6px; padding:10px; margin:0 0 10px;
+  }
+  input[type=text]:focus{outline:3px solid var(--warn); outline-offset:2px}
+  #send-status{margin:4px 0 16px; min-height:1.5em}
   textarea{
     width:100%; min-height:220px; background:#0a0c0f; color:var(--fg);
     border:1px solid var(--line); border-radius:6px; padding:10px;
@@ -48,8 +54,8 @@
 <body>
 
 <h1>PortalCast device check</h1>
-<p class="sub">A development instrument. Nothing is uploaded and nothing leaves this device &mdash;
-it inspects the browser and prints what it finds.</p>
+<p class="sub">A development instrument. It inspects the browser and prints what it finds.
+Nothing leaves this device unless you press <em>Send report</em> at the bottom.</p>
 
 <div class="card">
   <strong>How to get a full result:</strong>
@@ -57,7 +63,8 @@ it inspects the browser and prints what it finds.</p>
     <li>Press every button on the TV remote, so the <em>Remote buttons</em> section records the key map.</li>
     <li>Press the two buttons under <em>Screen</em> &mdash; fullscreen and wake lock need a real button press to test.</li>
     <li>Close the browser <em>completely</em>, reopen this page, and check whether storage survived.</li>
-    <li>Press <em>Build report</em> and paste the output into <code>docs/devices.md</code>.</li>
+    <li>Press <em>Send report</em> at the bottom. It goes straight to the developer's report sheet &mdash;
+      no copying needed. (Or <em>Build report</em> and copy it, where the clipboard works.)</li>
   </ol>
 </div>
 
@@ -104,8 +111,18 @@ advance whether a TV is worth trying.</p>
 <div><button id="b-clearkeys">Clear</button></div>
 
 <h2>Report</h2>
+<div class="card">
+  <strong>Send to the developer</strong>
+  <p class="sub" style="margin:4px 0 10px">Sends this page's results &mdash; device capabilities and the
+  remote-button log, exactly what <em>Build report</em> shows &mdash; to a private Google Sheet.
+  No file names, no pairing codes, no identifiers. Only sent when you press the button.</p>
+  <label for="label" class="sub">Optional: name this device, e.g. "Living room Samsung"</label><br>
+  <input type="text" id="label" maxlength="100" autocomplete="off">
+  <div><button id="b-send" class="big">Send report</button></div>
+  <div id="send-status" class="sub"></div>
+</div>
 <div>
-  <button id="b-report" class="big">Build report</button>
+  <button id="b-report">Build report</button>
   <button id="b-copy">Copy to clipboard</button>
 </div>
 <textarea id="report" readonly placeholder="Press Build report."></textarea>
@@ -116,6 +133,14 @@ advance whether a TV is worth trying.</p>
   var LS_FIRST = 'pc_check_first_seen';
   var LS_LOADS = 'pc_check_load_count';
   var FRAG_FLAG = 'frag-test';
+
+  /*
+   * Where Send report posts to: the /exec URL of the Google Apps Script in
+   * scripts/telemetry/Code.gs, which appends each report to a Google Sheet.
+   * Plan §12. Empty means not set up yet, and the button says so.
+   */
+  var REPORT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbw_iCYwQBtaa-XrabDGYWOHC7avMchbL4FqABLg7njt23IQI8SyZfRZWBsHq58PKuItpA/exec';
+  var REPORT_VERSION = 1;
 
   var results = {};   /* section -> array of [key, value, verdict] */
   var keyLog = [];
@@ -458,6 +483,135 @@ advance whether a TV is worth trying.</p>
       if (!done && navigator.clipboard) { navigator.clipboard.writeText(ta.value); }
     } catch (e) {
       alert('Could not copy automatically — please select the text and copy it manually.');
+    }
+  };
+
+  /* ---------- Send report (plan §12) ---------- */
+  /* First value in a section whose label starts with the given text. */
+  function val(section, labelStart) {
+    var rows = results[section] || [];
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i][0].indexOf(labelStart) === 0) return rows[i][1];
+    }
+    return '';
+  }
+
+  /* The columns the Sheet shows at a glance; the full report rides along too. */
+  function buildSummary() {
+    return {
+      userAgent: navigator.userAgent,
+      localStorage: val('storage', 'localStorage works'),
+      survivedRestart: val('storage', 'Survived a restart'),
+      visits: val('storage', 'Visits counted'),
+      fragmentSurvived: val('fragment', 'Fragment survived a reload'),
+      getRandomValues: val('crypto', 'crypto.getRandomValues'),
+      aesGcm: val('crypto', 'subtle AES-GCM'),
+      videoCodecs: val('rtc', 'Video codecs it can receive'),
+      audioCodecs: val('rtc', 'Audio codecs it can receive'),
+      keyPresses: String(keyLog.length)
+    };
+  }
+
+  var sendBtn = document.getElementById('b-send');
+  var sendStatus = document.getElementById('send-status');
+  var sending = false;
+
+  function setSendStatus(text, cls) {
+    sendStatus.className = cls || 'sub';
+    sendStatus.textContent = text;
+  }
+
+  function finishSend(text, cls) {
+    sending = false;
+    sendBtn.disabled = false;
+    setSendStatus(text, cls);
+  }
+
+  /*
+   * Fallback for browsers whose XHR fails cross-origin: post a plain HTML form
+   * into a hidden iframe. Forms are not subject to CORS, so this gets through
+   * almost anywhere — but the reply cannot be read, so success is unconfirmed.
+   */
+  function sendViaForm(body) {
+    var frameName = 'pc_report_sink';
+    var frame = document.getElementById(frameName);
+    if (!frame) {
+      frame = document.createElement('iframe');
+      frame.id = frameName;
+      frame.name = frameName;
+      frame.style.display = 'none';
+      document.body.appendChild(frame);
+    }
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = REPORT_ENDPOINT;
+    form.target = frameName;
+    form.style.display = 'none';
+    var field = document.createElement('input');
+    field.type = 'hidden';
+    field.name = 'payload';
+    field.value = body;
+    form.appendChild(field);
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
+    finishSend('Sent, but this browser could not confirm it arrived. Please mention the device name so it can be checked.', 'warn');
+  }
+
+  sendBtn.onclick = function () {
+    if (sending) return;
+    if (!REPORT_ENDPOINT) {
+      setSendStatus('Sending is not set up yet (REPORT_ENDPOINT is empty). Use Build report instead.', 'no');
+      return;
+    }
+    var report = buildReport();
+    document.getElementById('report').value = report;
+    var body = JSON.stringify({
+      v: REPORT_VERSION,
+      kind: 'check',
+      label: document.getElementById('label').value.replace(/^\s+|\s+$/g, '').slice(0, 100),
+      summary: buildSummary(),
+      report: report
+    });
+
+    sending = true;
+    sendBtn.disabled = true;
+    setSendStatus('Sending…');
+
+    var xhr;
+    try { xhr = new XMLHttpRequest(); } catch (e) { sendViaForm(body); return; }
+    var settled = false;
+    function fallback() {
+      if (settled) return;
+      settled = true;
+      sendViaForm(body);
+    }
+    try {
+      xhr.open('POST', REPORT_ENDPOINT, true);
+      /* text/plain keeps this a "simple" request: no CORS preflight, which
+         Apps Script cannot answer. */
+      xhr.setRequestHeader('Content-Type', 'text/plain;charset=utf-8');
+      xhr.timeout = 20000;
+      xhr.onload = function () {
+        if (settled) return;
+        var res = null;
+        try { res = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
+        if (res && res.ok) {
+          settled = true;
+          finishSend('Sent — thank you. (Row ' + res.row + ')', 'ok');
+        } else if (res && res.error) {
+          settled = true;
+          finishSend('The report sheet refused it: ' + res.error, 'no');
+        } else {
+          /* Got something we cannot read — try the form route once. */
+          fallback();
+        }
+      };
+      xhr.onerror = fallback;
+      xhr.ontimeout = fallback;
+      xhr.send(body);
+    } catch (e) {
+      fallback();
     }
   };
 })();

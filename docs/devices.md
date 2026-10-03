@@ -3,9 +3,13 @@
 Paste `/check` reports here, one section per device. See `portalcast-plan.md` §13 milestone 1b
 for what `/check` probes and §14 for the wider testing plan.
 
+`/check`'s **Send report** button posts each run to the owner's Google Sheet (plan §12.2), so a TV
+with no usable clipboard can still deliver its results. The Sheet is the raw inbox; this file is
+the curated, de-duplicated record.
+
 This is a development log for **our own** devices, the Tizen and webOS emulators, and any
-friend who runs it. Field data from devices we will never touch is a separate mechanism —
-plan §12.
+friend who runs it. Field data from devices we will never touch is the live app's job —
+plan §12.3.
 
 ---
 
