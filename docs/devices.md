@@ -7,8 +7,8 @@ for what `/check` probes and §14 for the wider testing plan.
 with no usable clipboard can still deliver its results. The Sheet is the raw inbox; this file is
 the curated, de-duplicated record.
 
-This is a development log for **our own** devices, Samsung TVs borrowed through Samsung's Remote
-Test Lab, the webOS TV Simulator, and any friend who runs it. Each report opens with the support
+This is a development log for **our own** devices, old desktop Chromium builds matching TV
+engines, the webOS TV Simulator, and any friend who runs it. Each report opens with the support
 verdict (plan §4). Field data from devices we will never touch is the live app's job —
 plan §12.3.
 

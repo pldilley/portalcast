@@ -66,7 +66,8 @@ Originally Mode B was to follow Mode A as the "high quality" mode (decision 2). 
 - The design that resulted is recorded in plan §7 (Mode B, parked). It is only built if the gate there opens.
 
 ### 3.4 TV browser realities
-- **[knowledge]** Samsung and LG browsers are **frozen at the Chromium version of the TV's model year** — firmware updates rarely move the engine. A 2018 Samsung is roughly Chromium 56 for life. The owner's reaction: "That's a terrible security design." This is why support is decided by feature tests (decision 59).
+- **[verified, 8 Oct]** Samsung and LG web engines are **fixed to the TV's model year**. Samsung (Tizen): 2015–16 WebKit, 2017 Chromium 47, 2018 M56, 2019 M63, 2020 M69, 2021 M76, 2022 M85, 2023 M94, 2024 M108, 2025 M120, 2026 M130. LG (webOS): 2014–15 WebKit, 2016–17 Chromium 38, **2018–19 Chromium 53**, 2020 C68, 2021 C79, 2022 C87, 2023 C94, 2024 C108, 2025 C120, 2026 C132. Both tables describe the platform web engine that web apps run on; whether the built-in *browser app* always matches is **[unverified]** — LG notes its early browser apps used a different Chromium from the engine. Sources: developer.samsung.com/smarttv/develop/specifications/web-engine-specifications.html, webostv.developer.lge.com/develop/specifications/web-api-and-web-engine.
+- **[owner, 8 Oct]** Samsung's Remote Test Lab TVs were all broken when tried, so Samsung testing uses old desktop Chromium builds matched to the table above. Samsung documentation says `localStorage` persists; the plan still builds the fragment fallback (plan §6.5) in case a browser wipes it. The owner's reaction: "That's a terrible security design." This is why support is decided by feature tests (decision 59).
 - **[knowledge]** Samsung (Tizen) and LG (webOS) browsers are Chromium-based and fairly capable. Fire TV has Silk. Many Android TV / Google TV devices ship **with no browser**; a browser can be sideloaded (TV Bro is popular; sideloaded Chrome works but is awkward with a remote).
 - **[knowledge]** Fullscreen and audio autoplay require a user gesture on that device. A remote-control press on a button usually counts. The controller cannot trigger fullscreen on the TV remotely. Fix: a big "Press OK to start" button, plus a full-viewport black layout as a fallback.
 - **[verified]** A self-hosted signage project runs on the Samsung Tizen browser and advises: set the player page as the browser homepage, use the browser's own Full screen menu option, and disable the TV's auto power-off and screen saver. Its TV player is written in plain ES5 for old TV browsers.
@@ -522,7 +523,7 @@ Ordered by how much depends on them. Mode A and pairing first; Mode B items last
 7. **Codec audit — Mode B only (decision 45).** `canPlayType()` against real codec strings on each TV, plus a scan of an actual library.
 8. **Service Worker ranged media on a real TV — Mode B only.** Tizen/webOS are Chromium so it should work, but it is unverified and Mode B depends on it entirely.
 
-**What `/check` covers:** items 1, 2 and 4, the TV half of 3 (advertised stereo) and of 7 (`canPlayType`), and 8's Service Worker registration — for our own TVs, Samsung's Remote Test Lab and the webOS Simulator (decision 25, amended by 59). It also shows the support verdict (plan §4). For devices we will never touch, decision 46's field reports are the mechanism.
+**What `/check` covers:** items 1, 2 and 4, the TV half of 3 (advertised stereo) and of 7 (`canPlayType`), and 8's Service Worker registration — for our own TVs, old Chromium builds matching TV engines and the webOS Simulator (decision 25, amended by 59). It also shows the support verdict (plan §4). For devices we will never touch, decision 46's field reports are the mechanism.
 
 ---
 
