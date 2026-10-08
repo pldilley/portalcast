@@ -140,6 +140,12 @@ Consequences recorded elsewhere: relay semantics in §10, Remote connection flow
   - **Known limitation for later:** GitHub Pages cannot set response headers. That only bites when ffmpeg.wasm arrives for MKV remux, which wants `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy` for `SharedArrayBuffer`. A single-threaded ffmpeg.wasm build avoids it; otherwise move to Cloudflare Pages or Netlify, which support a `_headers` file. Not a blocker now.
   - Vite's `base` must match whatever path the site is actually served from.
 - **Build target:** TV browsers can be old. Target ES2017 for the Portal bundle, avoid very new APIs there, and feature-detect everything.
+- **Which TVs are supported: decided by feature tests, never by browser name or version** (decision 59). Samsung and LG browsers are frozen at the Chromium version of the TV's model year — roughly Chromium 38–47 in 2016–17 TVs, 56–63 in 2018–19, 68–79 in 2020–21, 85+ from 2022 **[knowledge — confirm against the vendors' spec pages]** — and those TVs stay in use for years. Android TV/Google TV browsers (via the system WebView) and Fire TV Silk update themselves. **The design floor is about Chromium 56** — don't use anything newer in the Portal without a fallback — but the gate is the test list, so any browser that passes is supported, whatever it calls itself.
+  - **The gate:** a small inline ES5 script on `/tv` that runs *before* the app bundle, tests the list below, and on any failure shows a plain "This TV's browser can't run PortalCast" message naming what is missing, instead of loading the app and half-working. It must be ES5 and inline because the bundle itself can't even parse on the browsers it is there to turn away.
+  - **Required** (any one missing = unsupported): secure context; `Promise`; `crypto.getRandomValues`; `crypto.subtle` AES-GCM (Trystero encrypts the handshake with it); `RTCPeerConnection` with `createDataChannel`; `WebSocket` (Trystero's relays); `TextEncoder`; `srcObject` on `<video>` (playing the received stream). Trystero's own needs are provisional until its source is read (context §5).
+  - **Needed only to load the build:** ES2017 syntax and module scripts. **Module scripts need Chromium 61**, so Chromium 56–60 TVs pass every required test yet would never run a standard Vite bundle. They would need a second, older-style `nomodule` build (Vite's legacy plugin). Whether that is worth making is decided by `/check` data (§15).
+  - **Not required** — the Portal degrades instead: `localStorage` surviving restarts (bookmark fallback, §6.5), URL fragments, fullscreen, wake lock, `RTCRtpReceiver.getCapabilities` (fall back to VP8 + Opus).
+  - `/check` runs the same list and shows the verdict first (§13 milestone 1b). Keep the two lists identical.
 - **PWA (Remote):** web app manifest + a small Service Worker so the Remote can be added to the home screen and opens instantly.
 
 **Two Trystero gaps we work around, and plan to upstream** (detail in `portalcast-context.md` §5):
@@ -747,7 +753,7 @@ Tiny, mobile-first, and **it never joins a room on its own** — if it did, a ph
 
 ## 12. Device reports and telemetry
 
-We own two TVs plus the Tizen and webOS emulators. Real users will run PortalCast on devices we will never touch, and their Portals already know exactly what we need: receive codecs, storage persistence, fragment survival, and whether pairing and playback actually worked.
+We own two TVs and can borrow Samsung TVs through Samsung's Remote Test Lab. Real users will run PortalCast on devices we will never touch, and their Portals already know exactly what we need: receive codecs, storage persistence, fragment survival, and whether pairing and playback actually worked.
 
 ### 12.1 The collector: a Google Sheet, not a server
 
@@ -798,6 +804,7 @@ Sending uses a plain `XMLHttpRequest` with a `text/plain` body (a "simple" reque
 
    | Probe | Decides |
    |---|---|
+   | **Support verdict:** the required-feature list from §4 | Whether this TV can run PortalCast at all, and whether a 2018-era TV only lacks module scripts (the legacy-build question, §15) |
    | `RTCRtpReceiver.getCapabilities('video')` | Whether this TV model is worth trying at all, and seeds `docs/devices.md`. **The product does not rely on this page** — the Portal reports the same thing over `capabilities` at connect time (§7) |
    | `getCapabilities('audio')`, Opus stereo in the SDP | Whether the TV's receiver *advertises* stereo Opus — necessary but not sufficient. Whether stereo actually arrives is proven end-to-end with `getStats()` in milestone 3 (`docs/quality.md`), never from the SDP (§7) |
    | `localStorage` survives a browser restart | Whether bookmarking is a convenience or the *only* pairing record (§6.5) |
@@ -808,7 +815,7 @@ Sending uses a plain `XMLHttpRequest` with a `text/plain` body (a "simple" reque
    | `canPlayType()` against real codec strings | *Mode B only — irrelevant to Mode A, where the TV never sees the file* |
    | Service Worker registration and ranged media | *Mode B only* |
 
-   **Audience: us.** Our own TVs, the Tizen and webOS emulators, and at most a few friends — all of whom can type a long URL. It is a development instrument, not a public page, so it needs no short domain and no marketing copy. Results reach us through its **Send report** button (§12.2), because TV browsers often have no usable clipboard. Field data from real users is the live app's job (§12.3).
+   **Audience: us.** Our own TVs, Samsung's Remote Test Lab, the webOS TV Simulator, and at most a few friends — all of whom can type a long URL. It is a development instrument, not a public page, so it needs no short domain and no marketing copy. Results reach us through its **Send report** button (§12.2), because TV browsers often have no usable clipboard. Field data from real users is the live app's job (§12.3).
 2. **Pairing:** QR generation and scanning, ephemeral and permanent credentials, one room per pairing, fragment bookmarking, `unpair` and reset, profiles.
 2b. **Portal UI (§11.2):** persistent top bar with Source selector, the three states, d-pad focus ring and the `key`/`keyCode` input map, wake lock. **No playback controls** — media keys are deferred (§11.2).
 3. **Mode A streaming (native):** pick file, capture, stream, play/pause/seek/volume, status back to Source — **including the full quality-tuning set in §7**, with `getStats()` measurements recorded. Chrome first, then Firefox.
@@ -851,7 +858,11 @@ Sending uses a plain `XMLHttpRequest` with a `text/plain` body (a "simple" reque
 - **Automated:** Playwright with three browser contexts for pairing (via the injection hook), roles, Mode A, and Remote control. (Mode B only if its gate opens, §7.)
 - **Mode A quality:** `getStats()` measurements of bitrate, resolution, framerate and codec, with and without the tuning set, recorded in `docs/quality.md`. Confirm stereo audio actually arrives. Also record laptop CPU and battery over a full film — that is the number the Mode B gate turns on.
 - **Library audit — Mode B only, NOT on the critical path.** `scripts/audit-library.sh ~/Movies` reports container, codec, resolution and HDR distribution plus what fraction would play directly on a basic TV. **Only run it if the Mode B gate opens** (§7). In Mode A the Source decodes the file and re-encodes it as a WebRTC stream, so the TV never sees the container or the file codec and the library's format mix is irrelevant.
-- **Emulators** where real hardware is missing: Tizen Studio and the webOS TV SDK both ship free TV emulators. Not trustworthy for codec support, but fine for Service Workers, fragments, storage behaviour and `canPlayType` shape.
+- **TVs we don't own:**
+  - **Samsung Remote Test Lab** — free remote access to real Samsung TVs from the browser. The main way to test Tizen, including older model years.
+  - **LG webOS TV Simulator** — free, runs on macOS (one app per webOS version). Fine for JavaScript, storage and fragments; not trustworthy for codecs.
+  - **Old desktop Chromium builds** — a cheap stand-in for a model year's engine, without the remote, the memory limits or the hardware decoders.
+  - The Tizen Studio TV emulator and the original webOS VirtualBox emulator need an Intel machine; usable on the owner's old Intel Mac if the above fall short.
 - **Background-tab tests:** play a long file with the Source tab in the background for 30+ minutes in each desktop browser; record whether playback survives. Keep results in `docs/devices.md`.
 - **Real devices early:** at least one Samsung (Tizen) or LG (webOS) TV, one Android TV with a sideloaded browser, one iPhone and one Android phone as Remotes. Per device record: fullscreen, autoplay, Service Worker, `RTCRtpReceiver.getCapabilities` codecs, `getRandomValues` and `crypto.subtle` AES-GCM, the remote's key map, **whether URL fragments survive**, **whether `localStorage` survives a restart**, and how bookmarking works.
 - **Scanning:** real laptop webcams against real TV panels, at angles, with glare, on glossy screens.
@@ -862,6 +873,7 @@ Sending uses a plain `XMLHttpRequest` with a `text/plain` body (a "simple" reque
 
 ## 15. Open questions
 
+- **Make an older-style `nomodule` build for Chromium 56–60 TVs?** These pass every required feature but can't load module scripts (§4). Costs a second bundle and Babel-transpiled code. Decide when `/check` reports show how many real TVs fall in that gap — if none of ours do, don't build it.
 - Domain for PortalCast — `portalcast.tv` is the current candidate. **Nothing is blocked on it:** the only people typing a URL on a TV are the owner and a few friends, and the permanent pairing is a bookmark thereafter (§6.5). Also check trademark clearance: "Portal" is a Valve game and was also a Meta device name, so avoid their logos or artwork and check the combined name.
 - Which default relays to pin in `relayConfig.urls`, and whether to self-host a `ws-relay` from day one for reliability.
 - **Is tuned Mode A good enough on a LAN at 1080p?** The single most valuable early measurement, and the only one that matters: if yes, Mode B is never built and the library's formats never matter. Answered by the measurements taken in milestone 3 (§13) and recorded in `docs/quality.md` (§14).

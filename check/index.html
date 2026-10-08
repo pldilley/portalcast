@@ -65,6 +65,12 @@ Nothing leaves this device unless you press <em>Send report</em> at the bottom.<
   </ol>
 </div>
 
+<h2>Can this TV run PortalCast?</h2>
+<p class="sub">The features the TV page cannot work without (plan &sect;4). The live app runs the
+same checks and shows an "unsupported" message instead of half-working. Everything further down
+is detail.</p>
+<table id="t-support"></table>
+
 <h2>Device</h2>
 <table id="t-device"></table>
 
@@ -417,6 +423,8 @@ advance whether a TV is worth trying.</p>
    * password, so AES-GCM must work or password-protected rooms break entirely.
    * That is what we test here. Plan §5.1.
    */
+  /* 'testing' until the async probe answers; read by the support verdict. */
+  var aesState = 'testing';
   if (hasSubtle) {
     startPending();
     startPending();
@@ -440,16 +448,20 @@ advance whether a TV is worth trying.</p>
         .then(function (buf) {
           var n = buf && buf.byteLength ? buf.byteLength : 0;
           setCryptoRow('subtle AES-GCM (Trystero needs this)', n > 0 ? 'yes' : 'returned nothing', n > 0 ? 'ok' : 'no');
+          aesState = n > 0 ? 'yes' : 'no';
         })
         ['catch'](function (e) {
           setCryptoRow('subtle AES-GCM (Trystero needs this)', 'FAILED: ' + e, 'no');
+          aesState = 'no';
         })
-        .then(donePending, donePending);
+        .then(function () { renderSupport(); donePending(); }, function () { renderSupport(); donePending(); });
     } catch (e5) {
       setCryptoRow('subtle AES-GCM (Trystero needs this)', 'threw: ' + e5, 'no');
+      aesState = 'no';
       donePending();
     }
   } else {
+    aesState = 'no';
     setCryptoRow('subtle.digest SHA-256', 'crypto.subtle missing', 'warn');
     setCryptoRow('subtle AES-GCM (Trystero needs this)', 'crypto.subtle missing — pairing cannot work', 'no');
   }
@@ -598,8 +610,97 @@ advance whether a TV is worth trying.</p>
     logEl.innerHTML = '<div class="sub">Cleared. Waiting for a key press…</div>';
   };
 
+  /* ---------- Can this TV run PortalCast? (plan §4) ---------- */
+  /*
+   * Support is decided by testing features, never by browser name or version.
+   * REQUIRED: without any one of these the Portal cannot pair or play at all.
+   * BUNDLE: what the app's build needs to even load. Missing only these means
+   * the TV could work with a separate older-style build, which we have not
+   * made — the /check data decides whether it is worth making (plan §15).
+   * Keep this list identical to the Portal's own check when that is built.
+   */
+  function canRun(src) {
+    try { new Function(src); return true; } catch (e) { return false; }
+  }
+  var testVideo = document.createElement('video');
+  var REQUIRED = [
+    ['Secure page (HTTPS)', function () { return !!window.isSecureContext; }],
+    ['Promises', function () { return typeof Promise === 'function'; }],
+    ['Random numbers (crypto.getRandomValues)', function () { return hasGRV; }],
+    ['Encryption (AES-GCM)', function () { return aesState; }],
+    ['Peer connections (RTCPeerConnection)', function () { return has(window, 'RTCPeerConnection'); }],
+    ['Data channels', function () {
+      var pc = null;
+      try {
+        pc = new RTCPeerConnection();
+        var ch = pc.createDataChannel('probe');
+        return !!ch;
+      } catch (e) {
+        return false;
+      } finally {
+        try { if (pc) pc.close(); } catch (e2) {}
+      }
+    }],
+    ['Signalling connection (WebSocket)', function () { return typeof WebSocket === 'function' || typeof WebSocket === 'object'; }],
+    ['Text encoding (TextEncoder)', function () { return typeof TextEncoder === 'function'; }],
+    ['Play a live stream (video.srcObject)', function () { return 'srcObject' in testVideo; }]
+  ];
+  var BUNDLE = [
+    ['Modern JavaScript (async/await)', function () { return canRun('return async function () { await 0; };'); }],
+    ['Module scripts', function () { return 'noModule' in document.createElement('script'); }]
+  ];
+
+  /* Run each test once; only AES-GCM is asynchronous and is re-read on each render. */
+  function runTests(list) {
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var r;
+      try { r = list[i][1](); } catch (e) { r = false; }
+      out.push([list[i][0], list[i][1], r === true || r === 'yes' ? 'yes' : (r === 'testing' ? 'testing' : 'no')]);
+    }
+    return out;
+  }
+  var requiredResults = runTests(REQUIRED);
+  var bundleResults = runTests(BUNDLE);
+
+  function renderSupport() {
+    var missingReq = [], missingBundle = [], testing = false, i;
+    results['support'] = [];
+    for (i = 0; i < requiredResults.length; i++) {
+      /* Re-read the asynchronous answer (AES-GCM); the others are fixed. */
+      if (requiredResults[i][2] === 'testing') {
+        var now = requiredResults[i][1]();
+        if (now !== 'testing') requiredResults[i][2] = now === true || now === 'yes' ? 'yes' : 'no';
+      }
+      if (requiredResults[i][2] === 'testing') testing = true;
+      if (requiredResults[i][2] === 'no') missingReq.push(requiredResults[i][0]);
+    }
+    for (i = 0; i < bundleResults.length; i++) {
+      if (bundleResults[i][2] === 'no') missingBundle.push(bundleResults[i][0]);
+    }
+
+    if (missingReq.length) {
+      add('support', 'Verdict', 'NOT SUPPORTED — missing: ' + missingReq.join(', '), 'no');
+    } else if (testing) {
+      add('support', 'Verdict', 'testing…', 'warn');
+    } else if (missingBundle.length) {
+      add('support', 'Verdict', 'would need an older-style build (not made) — missing: ' + missingBundle.join(', '), 'warn');
+    } else {
+      add('support', 'Verdict', 'SUPPORTED', 'ok');
+    }
+    for (i = 0; i < requiredResults.length; i++) {
+      var st = requiredResults[i][2];
+      add('support', requiredResults[i][0], st === 'testing' ? 'testing…' : st, st === 'yes' ? 'ok' : (st === 'no' ? 'no' : 'warn'));
+    }
+    for (i = 0; i < bundleResults.length; i++) {
+      add('support', bundleResults[i][0] + ' (app build)', bundleResults[i][2], bundleResults[i][2] === 'yes' ? 'ok' : 'warn');
+    }
+    render('t-support', 'support');
+  }
+  renderSupport();
+
   /* ---------- Report ---------- */
-  var ORDER = ['device', 'storage', 'fragment', 'crypto', 'rtc', 'codecs', 'features', 'screen'];
+  var ORDER = ['support', 'device', 'storage', 'fragment', 'crypto', 'rtc', 'codecs', 'features', 'screen'];
 
   /*
    * Rows left out of the "shape" the report sheet de-duplicates on, so the
